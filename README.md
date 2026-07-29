@@ -17,6 +17,8 @@ Proiectul contine o aplicatie Windows pentru gestionarea si repartizarea candida
 
 ## Rulare aplicatie Windows
 
+Este necesar Microsoft .NET Framework 4.7.2 si Microsoft SQL Server LocalDB.
+
 Deschide solutia:
 
 `Proiect_admitere facultate/Proiect_admitere facultate.sln`
