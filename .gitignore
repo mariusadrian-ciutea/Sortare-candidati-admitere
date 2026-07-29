@@ -1,0 +1,40 @@
+# Windows / Visual Studio
+.vs/
+*.suo
+*.user
+*.rsuser
+*.lnk
+
+# Build output
+bin/
+obj/
+Debug/
+Release/
+*.pdb
+
+# Node / site build output
+node_modules/
+dist/
+.next/
+.vinext/
+.wrangler/
+out/
+outputs/
+work/
+.npm-cache/
+*.tsbuildinfo
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+*.tar.gz
+
+# Local databases can contain personal data
+*.mdf
+*.ldf
+
+# OS files
+.DS_Store
+Thumbs.db
