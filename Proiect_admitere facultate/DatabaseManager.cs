@@ -140,9 +140,68 @@ namespace Proiect_admitere_facultate
                 command.CommandText = InitialSchemaSql;
                 command.ExecuteNonQuery();
             }
+
+            RunMigrations(databasePath);
+        }
+
+        private static void RunMigrations(string databasePath)
+        {
+            using (SQLiteConnection connection =
+                   new SQLiteConnection(BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                EnablePragmas(connection);
+
+                ExecuteNonQuery(connection,
+                    "INSERT OR IGNORE INTO Esantioane (IdEsantion, Nume, EsteImplicit) VALUES (1, 'Eșantion principal', 1)");
+
+                EnsureColumn(connection, "Candidati", "IdEsantion",
+                    "INTEGER NOT NULL DEFAULT 1");
+                EnsureColumn(connection, "AdmitereFinala", "IdEsantion",
+                    "INTEGER NOT NULL DEFAULT 1");
+                EnsureColumn(connection, "AdmitereFinala", "Algoritm",
+                    "TEXT NOT NULL DEFAULT 'weighted'");
+                EnsureColumn(connection, "ImporturiWeb", "CreatLaFormular",
+                    "TEXT NULL");
+            }
+        }
+
+        private static void EnsureColumn(
+            SQLiteConnection connection, string tableName,
+            string columnName, string definition)
+        {
+            using (SQLiteCommand command = new SQLiteCommand(
+                "PRAGMA table_info(" + tableName + ")", connection))
+            using (SQLiteDataReader reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    if (string.Equals(reader["name"].ToString(), columnName,
+                        StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
+            }
+
+            ExecuteNonQuery(connection,
+                "ALTER TABLE " + tableName + " ADD COLUMN " +
+                columnName + " " + definition);
+        }
+
+        private static void ExecuteNonQuery(SQLiteConnection connection, string query)
+        {
+            using (SQLiteCommand command = new SQLiteCommand(query, connection))
+                command.ExecuteNonQuery();
         }
 
         private const string InitialSchemaSql = @"
+            CREATE TABLE IF NOT EXISTS Esantioane
+            (
+                IdEsantion INTEGER PRIMARY KEY AUTOINCREMENT,
+                Nume TEXT NOT NULL UNIQUE,
+                CreatLa TEXT NOT NULL DEFAULT (datetime('now')),
+                EsteImplicit INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS Facultati
             (
                 IdFacultate INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +221,7 @@ namespace Proiect_admitere_facultate
             CREATE TABLE IF NOT EXISTS Candidati
             (
                 IdCandidat INTEGER PRIMARY KEY AUTOINCREMENT,
+                IdEsantion INTEGER NOT NULL DEFAULT 1,
                 Nume TEXT NOT NULL,
                 Prenume TEXT NOT NULL,
                 Adresa TEXT NULL,
@@ -171,7 +231,8 @@ namespace Proiect_admitere_facultate
                 MedieBAC REAL CHECK (MedieBAC BETWEEN 1 AND 10),
                 MedieLiceu REAL CHECK (MedieLiceu BETWEEN 1 AND 10),
                 Status TEXT NOT NULL DEFAULT 'Nedefinit'
-                    CHECK (Status IN ('Nedefinit', 'Respins', 'Admis'))
+                    CHECK (Status IN ('Nedefinit', 'Respins', 'Admis')),
+                FOREIGN KEY (IdEsantion) REFERENCES Esantioane(IdEsantion)
             );
 
             CREATE TABLE IF NOT EXISTS OptiuniCandidat
@@ -190,10 +251,14 @@ namespace Proiect_admitere_facultate
             CREATE TABLE IF NOT EXISTS AdmitereFinala
             (
                 IdAdmitere INTEGER PRIMARY KEY AUTOINCREMENT,
+                IdEsantion INTEGER NOT NULL DEFAULT 1,
+                Algoritm TEXT NOT NULL DEFAULT 'weighted',
                 IdCandidat INTEGER NOT NULL,
                 IdSpecializare INTEGER NOT NULL,
+                FOREIGN KEY (IdEsantion) REFERENCES Esantioane(IdEsantion),
                 FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
-                FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare)
+                FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare),
+                UNIQUE (IdEsantion, Algoritm, IdCandidat)
             );
 
             CREATE TABLE IF NOT EXISTS ImporturiWeb
@@ -202,9 +267,13 @@ namespace Proiect_admitere_facultate
                 ExternalId INTEGER NOT NULL UNIQUE,
                 CodInscriere TEXT NOT NULL,
                 IdCandidat INTEGER NOT NULL,
+                CreatLaFormular TEXT NULL,
                 ImportatLa TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat)
             );
+
+            INSERT OR IGNORE INTO Esantioane (IdEsantion, Nume, EsteImplicit)
+            VALUES (1, 'Eșantion principal', 1);
 
             INSERT OR IGNORE INTO Facultati (NumeFacultate, Abreviere)
             VALUES
@@ -241,15 +310,16 @@ namespace Proiect_admitere_facultate
                 FROM sqlite_master
                 WHERE type = 'table'
                   AND name IN ('Candidati', 'Facultati', 'Specializari',
-                               'OptiuniCandidat', 'AdmitereFinala', 'ImporturiWeb')";
+                               'OptiuniCandidat', 'AdmitereFinala',
+                               'ImporturiWeb', 'Esantioane')";
 
             using (SQLiteConnection connection = OpenConnection())
             using (SQLiteCommand command = new SQLiteCommand(query, connection))
             {
                 int tableCount = Convert.ToInt32(command.ExecuteScalar());
-                if (tableCount != 6)
+                if (tableCount != 7)
                     throw new InvalidOperationException(
-                        "Structura bazei de date este incompletă. Sunt necesare 6 tabele.");
+                        "Structura bazei de date este incompletă. Sunt necesare 7 tabele.");
             }
         }
 
@@ -278,8 +348,74 @@ namespace Proiect_admitere_facultate
             }
         }
 
+        public static DataTable GetSamples()
+        {
+            return ExecuteQuery(@"
+                SELECT IdEsantion, Nume
+                FROM Esantioane
+                ORDER BY EsteImplicit DESC, Nume ASC");
+        }
+
+        public static int GetDefaultSampleId()
+        {
+            object result = ExecuteQuery(@"
+                SELECT IdEsantion
+                FROM Esantioane
+                ORDER BY EsteImplicit DESC, IdEsantion ASC
+                LIMIT 1").Rows[0]["IdEsantion"];
+            return Convert.ToInt32(result);
+        }
+
+        public static int CreateSample(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Numele eșantionului este obligatoriu.", "name");
+
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteCommand command = new SQLiteCommand(@"
+                INSERT INTO Esantioane (Nume, EsteImplicit)
+                VALUES (@Nume, 0)",
+                connection))
+            {
+                AddParameter(command, "@Nume", name.Trim());
+                command.ExecuteNonQuery();
+                return Convert.ToInt32(connection.LastInsertRowId);
+            }
+        }
+
+        public static DataRow GetSampleSummary(int sampleId)
+        {
+            DataTable data = ExecuteQuery(@"
+                SELECT
+                    E.Nume AS Nume,
+                    COUNT(C.IdCandidat) AS Total,
+                    SUM(CASE WHEN C.Status = 'Nedefinit' THEN 1 ELSE 0 END) AS Nedefinit,
+                    SUM(CASE WHEN C.Status = 'Admis' THEN 1 ELSE 0 END) AS Admisi,
+                    SUM(CASE WHEN C.Status = 'Respins' THEN 1 ELSE 0 END) AS Respinsi,
+                    (
+                        SELECT COUNT(*)
+                        FROM ImporturiWeb I
+                        INNER JOIN Candidati CI ON I.IdCandidat = CI.IdCandidat
+                        WHERE CI.IdEsantion = E.IdEsantion
+                    ) AS Importate
+                FROM Esantioane E
+                LEFT JOIN Candidati C ON C.IdEsantion = E.IdEsantion
+                WHERE E.IdEsantion = @IdEsantion
+                GROUP BY E.IdEsantion, E.Nume",
+                CreateParameter("@IdEsantion", sampleId));
+
+            return data.Rows.Count > 0 ? data.Rows[0] : null;
+        }
+
         public static int SaveApplication(
             Candidat candidate, IList<string> specializationNames)
+        {
+            return SaveApplication(
+                candidate, specializationNames, GetDefaultSampleId());
+        }
+
+        public static int SaveApplication(
+            Candidat candidate, IList<string> specializationNames, int sampleId)
         {
             if (candidate == null)
                 throw new ArgumentNullException("candidate");
@@ -287,24 +423,26 @@ namespace Proiect_admitere_facultate
                 throw new ArgumentException(
                     "Este necesară cel puțin o opțiune.", "specializationNames");
 
+            EnsureSampleExists(sampleId);
             using (SQLiteConnection connection = OpenConnection())
             using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
                 try
                 {
-                    if (CandidateExistsByCnp(connection, transaction, candidate.CNP))
+                    if (CandidateExistsByCnp(connection, transaction, sampleId, candidate.CNP))
                         throw new InvalidOperationException(
-                            "Există deja o înscriere pentru acest CNP.");
+                            "Există deja o înscriere pentru acest CNP în eșantionul selectat.");
 
                     using (SQLiteCommand command = new SQLiteCommand(@"
                         INSERT INTO Candidati
-                            (Nume, Prenume, Adresa, Varsta, Sex, CNP,
+                            (IdEsantion, Nume, Prenume, Adresa, Varsta, Sex, CNP,
                              MedieBAC, MedieLiceu, Status)
                         VALUES
-                            (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
+                            (@IdEsantion, @Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
                              @MedieBAC, @MedieLiceu, 'Nedefinit')",
                         connection, transaction))
                     {
+                        AddParameter(command, "@IdEsantion", sampleId);
                         AddParameter(command, "@Nume", candidate.Nume);
                         AddParameter(command, "@Prenume", candidate.Prenume);
                         AddParameter(command, "@Adresa", candidate.Adresa);
@@ -333,11 +471,18 @@ namespace Proiect_admitere_facultate
 
         public static ImportResult ImportWebSubmission(WebSubmission submission)
         {
+            return ImportWebSubmission(submission, GetDefaultSampleId());
+        }
+
+        public static ImportResult ImportWebSubmission(
+            WebSubmission submission, int sampleId)
+        {
             if (submission == null)
                 throw new ArgumentNullException("submission");
             if (submission.options == null || submission.options.Count == 0)
                 throw new InvalidOperationException("Înscrierea nu conține opțiuni.");
 
+            EnsureSampleExists(sampleId);
             using (SQLiteConnection connection = OpenConnection())
             using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
@@ -358,20 +503,21 @@ namespace Proiect_admitere_facultate
                     }
 
                     int candidateId = FindCandidateIdByCnp(
-                        connection, transaction, submission.cnp);
+                        connection, transaction, sampleId, submission.cnp);
                     ImportResult result = ImportResult.AlreadyPresent;
 
                     if (candidateId == 0)
                     {
                         using (SQLiteCommand command = new SQLiteCommand(@"
                             INSERT INTO Candidati
-                                (Nume, Prenume, Adresa, Varsta, Sex, CNP,
+                                (IdEsantion, Nume, Prenume, Adresa, Varsta, Sex, CNP,
                                  MedieBAC, MedieLiceu, Status)
                             VALUES
-                                (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
+                                (@IdEsantion, @Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
                                  @MedieBAC, @MedieLiceu, 'Nedefinit')",
                             connection, transaction))
                         {
+                            AddParameter(command, "@IdEsantion", sampleId);
                             AddParameter(command, "@Nume", submission.nume);
                             AddParameter(command, "@Prenume", submission.prenume);
                             AddParameter(command, "@Adresa", submission.adresa);
@@ -391,15 +537,17 @@ namespace Proiect_admitere_facultate
 
                     using (SQLiteCommand command = new SQLiteCommand(@"
                         INSERT INTO ImporturiWeb
-                            (ExternalId, CodInscriere, IdCandidat)
+                            (ExternalId, CodInscriere, IdCandidat, CreatLaFormular)
                         VALUES
-                            (@ExternalId, @CodInscriere, @IdCandidat)",
+                            (@ExternalId, @CodInscriere, @IdCandidat, @CreatLaFormular)",
                         connection, transaction))
                     {
                         AddParameter(command, "@ExternalId", submission.id);
                         AddParameter(command, "@CodInscriere",
                             submission.submissionCode ?? string.Empty);
                         AddParameter(command, "@IdCandidat", candidateId);
+                        AddParameter(command, "@CreatLaFormular",
+                            submission.createdAt ?? string.Empty);
                         command.ExecuteNonQuery();
                     }
 
@@ -454,11 +602,19 @@ namespace Proiect_admitere_facultate
 
         public static int RunAdmission()
         {
+            return RunAdmission(GetDefaultSampleId(), "weighted");
+        }
+
+        public static int RunAdmission(int sampleId, string algorithm)
+        {
             using (SQLiteConnection connection = OpenConnection())
             using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
                 try
                 {
+                    EnsureSampleExists(sampleId);
+                    string safeAlgorithm = NormalizeAlgorithm(algorithm);
+                    string orderExpression = GetAlgorithmExpression(safeAlgorithm);
                     Dictionary<int, int> availableSeats = new Dictionary<int, int>();
                     using (SQLiteCommand command = new SQLiteCommand(
                         "SELECT IdSpecializare, NrLocuri FROM Specializari",
@@ -470,7 +626,7 @@ namespace Proiect_admitere_facultate
                                 reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
                     }
 
-                    const string candidatesQuery = @"
+                    string candidatesQuery = @"
                         SELECT C.IdCandidat, C.MedieLiceu, C.MedieBAC,
                                O.IdSpecializare1, O.IdSpecializare2, O.IdSpecializare3
                         FROM Candidati C
@@ -487,22 +643,40 @@ namespace Proiect_admitere_facultate
                                 ON O1.IdCandidat = Ultima.IdCandidat
                                AND O1.IdOptiune = Ultima.IdOptiune
                         ) O ON C.IdCandidat = O.IdCandidat
-                        ORDER BY (C.MedieLiceu * 0.3 + C.MedieBAC * 0.7) DESC,
+                        WHERE C.IdEsantion = @IdEsantion
+                        ORDER BY " + orderExpression + @" DESC,
+                                 C.MedieBAC DESC,
+                                 C.MedieLiceu DESC,
                                  C.IdCandidat ASC";
 
                     DataTable candidates = new DataTable();
                     using (SQLiteCommand command = new SQLiteCommand(
                         candidatesQuery, connection, transaction))
                     using (SQLiteDataAdapter adapter = new SQLiteDataAdapter(command))
+                    {
+                        AddParameter(command, "@IdEsantion", sampleId);
                         adapter.Fill(candidates);
+                    }
 
-                    using (SQLiteCommand clear = new SQLiteCommand(
-                        "DELETE FROM AdmitereFinala", connection, transaction))
-                        clear.ExecuteNonQuery();
-                    using (SQLiteCommand reset = new SQLiteCommand(
-                        "UPDATE Candidati SET Status = 'Nedefinit'",
+                    using (SQLiteCommand clear = new SQLiteCommand(@"
+                        DELETE FROM AdmitereFinala
+                        WHERE IdEsantion = @IdEsantion
+                          AND Algoritm = @Algoritm",
                         connection, transaction))
+                    {
+                        AddParameter(clear, "@IdEsantion", sampleId);
+                        AddParameter(clear, "@Algoritm", safeAlgorithm);
+                        clear.ExecuteNonQuery();
+                    }
+                    using (SQLiteCommand reset = new SQLiteCommand(@"
+                        UPDATE Candidati
+                        SET Status = 'Nedefinit'
+                        WHERE IdEsantion = @IdEsantion",
+                        connection, transaction))
+                    {
+                        AddParameter(reset, "@IdEsantion", sampleId);
                         reset.ExecuteNonQuery();
+                    }
 
                     int admitted = 0;
                     foreach (DataRow row in candidates.Rows)
@@ -532,11 +706,13 @@ namespace Proiect_admitere_facultate
                         {
                             using (SQLiteCommand insert = new SQLiteCommand(@"
                                 INSERT INTO AdmitereFinala
-                                    (IdCandidat, IdSpecializare)
+                                    (IdEsantion, Algoritm, IdCandidat, IdSpecializare)
                                 VALUES
-                                    (@IdCandidat, @IdSpecializare)",
+                                    (@IdEsantion, @Algoritm, @IdCandidat, @IdSpecializare)",
                                 connection, transaction))
                             {
+                                AddParameter(insert, "@IdEsantion", sampleId);
+                                AddParameter(insert, "@Algoritm", safeAlgorithm);
                                 AddParameter(insert, "@IdCandidat", candidateId);
                                 AddParameter(insert, "@IdSpecializare",
                                     selectedSpecialization);
@@ -571,18 +747,36 @@ namespace Proiect_admitere_facultate
 
         public static void ResetAdmission()
         {
+            ResetAdmission(GetDefaultSampleId(), "weighted");
+        }
+
+        public static void ResetAdmission(int sampleId, string algorithm)
+        {
             using (SQLiteConnection connection = OpenConnection())
             using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
                 try
                 {
-                    using (SQLiteCommand command = new SQLiteCommand(
-                        "DELETE FROM AdmitereFinala", connection, transaction))
-                        command.ExecuteNonQuery();
-                    using (SQLiteCommand command = new SQLiteCommand(
-                        "UPDATE Candidati SET Status = 'Nedefinit'",
+                    string safeAlgorithm = NormalizeAlgorithm(algorithm);
+                    using (SQLiteCommand command = new SQLiteCommand(@"
+                        DELETE FROM AdmitereFinala
+                        WHERE IdEsantion = @IdEsantion
+                          AND Algoritm = @Algoritm",
                         connection, transaction))
+                    {
+                        AddParameter(command, "@IdEsantion", sampleId);
+                        AddParameter(command, "@Algoritm", safeAlgorithm);
                         command.ExecuteNonQuery();
+                    }
+                    using (SQLiteCommand command = new SQLiteCommand(@"
+                        UPDATE Candidati
+                        SET Status = 'Nedefinit'
+                        WHERE IdEsantion = @IdEsantion",
+                        connection, transaction))
+                    {
+                        AddParameter(command, "@IdEsantion", sampleId);
+                        command.ExecuteNonQuery();
+                    }
                     transaction.Commit();
                 }
                 catch
@@ -593,26 +787,131 @@ namespace Proiect_admitere_facultate
             }
         }
 
-        private static bool CandidateExistsByCnp(
-            SQLiteConnection connection, SQLiteTransaction transaction, string cnp)
+        public static int GenerateDemoSample(string name, int count)
         {
-            return FindCandidateIdByCnp(connection, transaction, cnp) > 0;
+            if (string.IsNullOrWhiteSpace(name))
+                name = "Eșantion demo " + DateTime.Now.ToString("dd.MM HH:mm");
+            if (count <= 0)
+                count = 60;
+
+            int sampleId = CreateSample(name);
+            string[] firstNames =
+            {
+                "Andrei", "Maria", "Ioana", "Alexandru", "Elena", "Mihai",
+                "Daria", "Radu", "Teodora", "Vlad", "Ana", "Iulia",
+                "Matei", "Irina", "David", "Bianca", "Sofia", "Rareș"
+            };
+            string[] lastNames =
+            {
+                "Popescu", "Ionescu", "Dumitrescu", "Stan", "Radu",
+                "Marin", "Georgescu", "Munteanu", "Stoica", "Nistor",
+                "Diaconu", "Tudor", "Barbu", "Enache", "Ilie"
+            };
+
+            Random random = new Random();
+            DataTable specializations = ExecuteQuery(@"
+                SELECT NumeSpecializare
+                FROM Specializari
+                ORDER BY IdSpecializare");
+
+            for (int i = 0; i < count; i++)
+            {
+                Candidat candidate = new Candidat
+                {
+                    Nume = lastNames[random.Next(lastNames.Length)],
+                    Prenume = firstNames[random.Next(firstNames.Length)],
+                    Adresa = "Adresă demo " + (i + 1),
+                    Varsta = random.Next(18, 27),
+                    Sex = random.Next(2) == 0 ? "Feminin" : "Masculin",
+                    CNP = (1000000000000L + ((long)sampleId * 100000L) + i)
+                        .ToString(),
+                    MedieBAC = Math.Round(6.0 + random.NextDouble() * 4.0, 2),
+                    MedieLiceu = Math.Round(6.0 + random.NextDouble() * 4.0, 2),
+                    Status = "Nedefinit"
+                };
+
+                List<string> options = new List<string>();
+                foreach (int index in Enumerable.Range(0, specializations.Rows.Count)
+                    .OrderBy(x => random.Next()).Take(3))
+                {
+                    options.Add(specializations.Rows[index]["NumeSpecializare"].ToString());
+                }
+
+                SaveApplication(candidate, options, sampleId);
+            }
+
+            return sampleId;
+        }
+
+        private static bool CandidateExistsByCnp(
+            SQLiteConnection connection, SQLiteTransaction transaction,
+            int sampleId, string cnp)
+        {
+            return FindCandidateIdByCnp(connection, transaction, sampleId, cnp) > 0;
         }
 
         private static int FindCandidateIdByCnp(
-            SQLiteConnection connection, SQLiteTransaction transaction, string cnp)
+            SQLiteConnection connection, SQLiteTransaction transaction,
+            int sampleId, string cnp)
         {
             using (SQLiteCommand command = new SQLiteCommand(@"
                 SELECT IdCandidat
                 FROM Candidati
-                WHERE CNP = @CNP",
+                WHERE IdEsantion = @IdEsantion
+                  AND CNP = @CNP",
                 connection, transaction))
             {
+                AddParameter(command, "@IdEsantion", sampleId);
                 AddParameter(command, "@CNP", cnp);
                 object result = command.ExecuteScalar();
                 return result == null || result == DBNull.Value
                     ? 0
                     : Convert.ToInt32(result);
+            }
+        }
+
+        private static void EnsureSampleExists(int sampleId)
+        {
+            DataTable data = ExecuteQuery(@"
+                SELECT COUNT(*) AS CountValue
+                FROM Esantioane
+                WHERE IdEsantion = @IdEsantion",
+                CreateParameter("@IdEsantion", sampleId));
+
+            if (Convert.ToInt32(data.Rows[0]["CountValue"]) == 0)
+                throw new InvalidOperationException(
+                    "Eșantionul selectat nu mai există.");
+        }
+
+        private static string NormalizeAlgorithm(string algorithm)
+        {
+            if (string.IsNullOrWhiteSpace(algorithm))
+                return "weighted";
+
+            switch (algorithm.Trim().ToLowerInvariant())
+            {
+                case "bac":
+                case "liceu":
+                case "balanced":
+                case "weighted":
+                    return algorithm.Trim().ToLowerInvariant();
+                default:
+                    return "weighted";
+            }
+        }
+
+        public static string GetAlgorithmExpression(string algorithm)
+        {
+            switch (NormalizeAlgorithm(algorithm))
+            {
+                case "bac":
+                    return "C.MedieBAC";
+                case "liceu":
+                    return "C.MedieLiceu";
+                case "balanced":
+                    return "((C.MedieBAC + C.MedieLiceu) / 2.0)";
+                default:
+                    return "(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7)";
             }
         }
 

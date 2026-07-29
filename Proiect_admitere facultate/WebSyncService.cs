@@ -55,6 +55,11 @@ namespace Proiect_admitere_facultate
 
         public static async Task<SyncResult> SynchronizeAsync()
         {
+            return await SynchronizeAsync(DatabaseManager.GetDefaultSampleId());
+        }
+
+        public static async Task<SyncResult> SynchronizeAsync(int sampleId)
+        {
             string baseUrl = ConfigurationManager.AppSettings["WebApiBaseUrl"];
             string token = ConfigurationManager.AppSettings["WebImportToken"];
             if (!IsConfigured)
@@ -90,7 +95,7 @@ namespace Proiect_admitere_facultate
                     try
                     {
                         ImportResult importResult =
-                            DatabaseManager.ImportWebSubmission(submission);
+                            DatabaseManager.ImportWebSubmission(submission, sampleId);
                         if (importResult == ImportResult.Imported)
                             result.Imported++;
                         else

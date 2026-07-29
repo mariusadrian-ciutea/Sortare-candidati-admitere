@@ -10,8 +10,10 @@ Proiectul contine o aplicatie Windows pentru gestionarea si repartizarea candida
 ## Functionalitati
 
 - preluarea inscrierilor trimise prin site;
-- listarea, cautarea si actualizarea candidatilor;
-- repartizarea candidatilor in functie de medie si optiuni;
+- organizarea candidatilor in esantioane separate, salvate cu nume ales de utilizator;
+- listarea, cautarea si actualizarea tuturor datelor primite prin formular;
+- repartizarea candidatilor pe esantion, cu algoritm ales din aplicatie;
+- generarea unui esantion demo cu studenti fictivi;
 - persistenta datelor intr-o baza SQLite locala, creata automat la prima pornire;
 - formular online pentru date personale, medii si optiuni de specializare.
 

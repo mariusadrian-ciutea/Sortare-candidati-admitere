@@ -293,6 +293,107 @@ namespace Proiect_admitere_facultate
         }
     }
 
+    internal sealed class SelectItem
+    {
+        public string Text { get; private set; }
+        public string Value { get; private set; }
+
+        public SelectItem(string text, string value)
+        {
+            Text = text;
+            Value = value;
+        }
+
+        public override string ToString()
+        {
+            return Text;
+        }
+    }
+
+    internal sealed class DashboardOverviewPanel : Control
+    {
+        public string SampleName { get; set; }
+        public int Total { get; set; }
+        public int Pending { get; set; }
+        public int Admitted { get; set; }
+        public int Rejected { get; set; }
+        public int Imported { get; set; }
+
+        public DashboardOverviewPanel()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            Font = new Font("Segoe UI", 10F);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            Rectangle face = new Rectangle(4, 4, Width - 10, Height - 12);
+            using (GraphicsPath path = ModernPalette.Rounded(face, 34))
+            using (LinearGradientBrush fill = new LinearGradientBrush(
+                face, Color.FromArgb(226, 255, 255, 255),
+                Color.FromArgb(158, 214, 246, 255), 25f))
+            using (Pen outline = new Pen(Color.FromArgb(210, 255, 255, 255), 2f))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(outline, path);
+            }
+
+            using (GraphicsPath wave = new GraphicsPath())
+            {
+                wave.AddBezier(face.Left - 20, face.Bottom - 80,
+                    face.Left + face.Width * .25f, face.Bottom - 170,
+                    face.Left + face.Width * .58f, face.Bottom - 25,
+                    face.Right + 30, face.Bottom - 118);
+                wave.AddLine(face.Right + 30, face.Bottom - 118,
+                    face.Right + 30, face.Bottom + 30);
+                wave.AddLine(face.Right + 30, face.Bottom + 30,
+                    face.Left - 20, face.Bottom + 30);
+                wave.CloseFigure();
+                using (LinearGradientBrush waveFill = new LinearGradientBrush(
+                    face, Color.FromArgb(92, 7, 180, 207),
+                    Color.FromArgb(25, 42, 224, 164), 0f))
+                    e.Graphics.FillPath(waveFill, wave);
+            }
+
+            TextRenderer.DrawText(e.Graphics, "EȘANTION ACTIV", 
+                new Font("Segoe UI Semibold", 9F, FontStyle.Bold),
+                new Rectangle(38, 30, Width - 80, 22), ModernPalette.Blue,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(e.Graphics,
+                string.IsNullOrWhiteSpace(SampleName) ? "—" : SampleName,
+                new Font("Segoe UI", 24F, FontStyle.Bold),
+                new Rectangle(36, 56, Width - 76, 50), ModernPalette.Ink,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.EndEllipsis);
+
+            int slotWidth = Math.Max(145, (Width - 80) / 5);
+            DrawNumber(e.Graphics, "Candidați", Total, 40, 136, slotWidth);
+            DrawNumber(e.Graphics, "Nedefiniți", Pending, 40 + slotWidth, 136, slotWidth);
+            DrawNumber(e.Graphics, "Admiși", Admitted, 40 + slotWidth * 2, 136, slotWidth);
+            DrawNumber(e.Graphics, "Respinși", Rejected, 40 + slotWidth * 3, 136, slotWidth);
+            DrawNumber(e.Graphics, "Din formular", Imported, 40 + slotWidth * 4, 136, slotWidth);
+        }
+
+        private static void DrawNumber(
+            Graphics graphics, string caption, int value, int left, int top, int width)
+        {
+            TextRenderer.DrawText(graphics, value.ToString(),
+                new Font("Segoe UI", 28F, FontStyle.Bold),
+                new Rectangle(left, top, width - 8, 48), ModernPalette.Ink,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(graphics, caption,
+                new Font("Segoe UI Semibold", 9.3F, FontStyle.Bold),
+                new Rectangle(left + 2, top + 52, width - 10, 24), ModernPalette.Muted,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.EndEllipsis);
+        }
+    }
+
     public sealed class MainDashboard : Form
     {
         private readonly Panel sidebar;
@@ -301,6 +402,7 @@ namespace Proiect_admitere_facultate
         private readonly NavButton dashboardNav;
         private readonly NavButton candidatesNav;
         private readonly NavButton admissionNav;
+        private readonly Image backgroundImage;
         private Control currentPage;
         private string currentPageKey;
 
@@ -318,6 +420,10 @@ namespace Proiect_admitere_facultate
             AutoScaleMode = AutoScaleMode.None;
             DoubleBuffered = true;
             SetStyle(ControlStyles.ResizeRedraw, true);
+            string backgroundPath = System.IO.Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory, "aero-background.png");
+            if (System.IO.File.Exists(backgroundPath))
+                backgroundImage = Image.FromFile(backgroundPath);
 
             sidebar = new Panel
             {
@@ -372,24 +478,19 @@ namespace Proiect_admitere_facultate
 
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            using (LinearGradientBrush baseFill = new LinearGradientBrush(
-                area, Color.FromArgb(199, 240, 248),
-                Color.FromArgb(238, 252, 254), 90f))
-                e.Graphics.FillRectangle(baseFill, area);
-
-            using (GraphicsPath aquaBand = new GraphicsPath())
+            if (backgroundImage != null)
             {
-                aquaBand.AddBezier(sidebar.Width - 70, ClientSize.Height - 120,
-                    ClientSize.Width * .32f, ClientSize.Height - 280,
-                    ClientSize.Width * .58f, ClientSize.Height - 70,
-                    ClientSize.Width + 80, ClientSize.Height - 210);
-                aquaBand.AddLine(ClientSize.Width + 80, ClientSize.Height + 70,
-                    sidebar.Width - 70, ClientSize.Height + 70);
-                aquaBand.CloseFigure();
-                using (LinearGradientBrush fill = new LinearGradientBrush(
-                    area, Color.FromArgb(118, 34, 174, 197),
-                    Color.FromArgb(48, 20, 135, 181), 0f))
-                    e.Graphics.FillPath(fill, aquaBand);
+                Rectangle source = CoverSourceRectangle(backgroundImage, area);
+                e.Graphics.DrawImage(backgroundImage, area, source, GraphicsUnit.Pixel);
+                using (SolidBrush veil = new SolidBrush(Color.FromArgb(80, 238, 252, 255)))
+                    e.Graphics.FillRectangle(veil, area);
+            }
+            else
+            {
+                using (LinearGradientBrush baseFill = new LinearGradientBrush(
+                    area, Color.FromArgb(199, 240, 248),
+                    Color.FromArgb(238, 252, 254), 90f))
+                    e.Graphics.FillRectangle(baseFill, area);
             }
 
             using (GraphicsPath glassArc = new GraphicsPath())
@@ -417,6 +518,29 @@ namespace Proiect_admitere_facultate
 
             using (SolidBrush glow = new SolidBrush(Color.FromArgb(82, 255, 255, 255)))
                 e.Graphics.FillEllipse(glow, ClientSize.Width - 350, 110, 260, 260);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && backgroundImage != null)
+                backgroundImage.Dispose();
+            base.Dispose(disposing);
+        }
+
+        private static Rectangle CoverSourceRectangle(Image image, Rectangle target)
+        {
+            float imageRatio = image.Width / (float)image.Height;
+            float targetRatio = target.Width / (float)target.Height;
+            if (imageRatio > targetRatio)
+            {
+                int sourceWidth = (int)(image.Height * targetRatio);
+                return new Rectangle((image.Width - sourceWidth) / 2, 0,
+                    sourceWidth, image.Height);
+            }
+
+            int sourceHeight = (int)(image.Width / targetRatio);
+            return new Rectangle(0, (image.Height - sourceHeight) / 2,
+                image.Width, sourceHeight);
         }
 
         private void MainDashboard_Shown(object sender, EventArgs e)
@@ -494,36 +618,53 @@ namespace Proiect_admitere_facultate
         {
             PagePanel page = NewPage();
             AddPageHeading(page, "Panou general",
-                "Urmărește înscrierile și pornește repartizarea candidaților.");
+                "Lucrează pe eșantioane separate și testează rapid scenarii de admitere.");
 
-            int cardWidth = 245;
-            GlassPanel totalCard = CreateMetricCard(page, 40, 108, cardWidth,
-                "CANDIDAȚI ÎN BAZĂ", "—", ModernPalette.Blue);
-            GlassPanel pendingCard = CreateMetricCard(page, 305, 108, cardWidth,
-                "ÎN AȘTEPTARE", "—", Color.FromArgb(225, 139, 29));
-            GlassPanel admittedCard = CreateMetricCard(page, 570, 108, cardWidth,
-                "ADMIȘI", "—", ModernPalette.Green);
+            ComboBox sampleCombo = CreateSampleCombo();
+            sampleCombo.SetBounds(page.Width - 570, 32, 245, 36);
+            sampleCombo.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            page.Controls.Add(sampleCombo);
 
-            totalCard.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-            pendingCard.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-            admittedCard.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            SmoothButton newSample = new SmoothButton
+            {
+                Text = "Eșantion nou",
+                Style = ActionButtonStyle.Light,
+                Bounds = new Rectangle(page.Width - 315, 24, 132, 50),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            page.Controls.Add(newSample);
 
-            LoadMetricCards(totalCard, pendingCard, admittedCard);
+            SmoothButton demo = new SmoothButton
+            {
+                Text = "Generează demo",
+                Style = ActionButtonStyle.Primary,
+                Bounds = new Rectangle(page.Width - 174, 24, 150, 50),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            page.Controls.Add(demo);
+
+            DashboardOverviewPanel overview = new DashboardOverviewPanel
+            {
+                Bounds = new Rectangle(40, 105, page.Width - 80, 245),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            page.Controls.Add(overview);
 
             GlassPanel syncCard = new GlassPanel
             {
-                Bounds = new Rectangle(40, 272, page.Width - 80, 170),
+                Bounds = new Rectangle(40, 374, page.Width - 80, 136),
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             page.Controls.Add(syncCard);
-            Label syncTitle = MakeLabel("Preia înscrieri", 17F,
+
+            Label syncTitle = MakeLabel("Preluare din formularul online", 15.5F,
                 FontStyle.Bold, ModernPalette.Ink);
-            syncTitle.SetBounds(28, 27, 520, 38);
+            syncTitle.SetBounds(28, 24, 420, 32);
             syncCard.Controls.Add(syncTitle);
             Label syncText = MakeLabel(
-                "Adu în aplicație înscrierile trimise prin formular.",
-                10F, FontStyle.Regular, ModernPalette.Muted);
-            syncText.SetBounds(30, 73, 690, 52);
+                "Alege eșantionul în care intră înscrierile și preia candidatii trimiși prin site.",
+                9.6F, FontStyle.Regular, ModernPalette.Muted);
+            syncText.SetBounds(30, 59, 680, 27);
             syncCard.Controls.Add(syncText);
 
             Label syncStatus = MakeLabel(
@@ -532,17 +673,85 @@ namespace Proiect_admitere_facultate
                     : "Preluarea nu este configurată",
                 9.3F, FontStyle.Bold,
                 WebSyncService.IsConfigured ? ModernPalette.Green : Color.FromArgb(191, 119, 18));
-            syncStatus.SetBounds(30, 118, 420, 28);
+            syncStatus.SetBounds(30, 91, 690, 28);
             syncCard.Controls.Add(syncStatus);
+
+            ComboBox importSample = CreateSampleCombo();
+            importSample.SetBounds(syncCard.Width - 470, 48, 240, 36);
+            importSample.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            syncCard.Controls.Add(importSample);
+            SetComboSelectedValue(importSample, SelectedSampleId(sampleCombo));
 
             SmoothButton sync = new SmoothButton
             {
                 Text = "Preia acum",
-                Style = ActionButtonStyle.Primary,
-                Bounds = new Rectangle(syncCard.Width - 252, 82, 220, 56),
+                Style = ActionButtonStyle.Secondary,
+                Bounds = new Rectangle(syncCard.Width - 215, 40, 185, 52),
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
             syncCard.Controls.Add(sync);
+
+            Action refreshOverview = delegate
+            {
+                LoadDashboardOverview(overview, SelectedSampleId(sampleCombo));
+            };
+            refreshOverview();
+
+            sampleCombo.SelectedIndexChanged += delegate
+            {
+                SetComboSelectedValue(importSample, SelectedSampleId(sampleCombo));
+                refreshOverview();
+            };
+
+            newSample.Click += delegate
+            {
+                string name = PromptForText("Eșantion nou",
+                    "Numele eșantionului:", "Eșantion " +
+                    DateTime.Now.ToString("dd.MM HH:mm"));
+                if (string.IsNullOrWhiteSpace(name))
+                    return;
+
+                try
+                {
+                    int id = DatabaseManager.CreateSample(name);
+                    ReloadSampleCombo(sampleCombo);
+                    ReloadSampleCombo(importSample);
+                    SetComboSelectedValue(sampleCombo, id);
+                    SetComboSelectedValue(importSample, id);
+                    refreshOverview();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Eșantion nou");
+                }
+            };
+
+            demo.Click += delegate
+            {
+                string name = PromptForText("Eșantion demo",
+                    "Numele eșantionului fictiv:", "Demo " +
+                    DateTime.Now.ToString("dd.MM HH:mm"));
+                if (string.IsNullOrWhiteSpace(name))
+                    return;
+
+                try
+                {
+                    int id = DatabaseManager.GenerateDemoSample(name, 80);
+                    ReloadSampleCombo(sampleCombo);
+                    ReloadSampleCombo(importSample);
+                    SetComboSelectedValue(sampleCombo, id);
+                    SetComboSelectedValue(importSample, id);
+                    refreshOverview();
+                    MessageBox.Show("Am generat 80 de candidați fictivi.",
+                        "Eșantion demo", MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Generare eșantion demo");
+                }
+            };
+
             sync.Click += async delegate
             {
                 sync.Enabled = false;
@@ -550,13 +759,15 @@ namespace Proiect_admitere_facultate
                 sync.Invalidate();
                 try
                 {
-                    SyncResult result = await WebSyncService.SynchronizeAsync();
+                    int sampleId = SelectedSampleId(importSample);
+                    SyncResult result = await WebSyncService.SynchronizeAsync(sampleId);
                     syncStatus.Text = string.Format(
                         "Importate: {0}   •   Deja existente: {1}   •   Erori: {2}",
                         result.Imported, result.AlreadyPresent, result.Failed);
                     syncStatus.ForeColor = result.Failed == 0
                         ? ModernPalette.Green : ModernPalette.Coral;
-                    LoadMetricCards(totalCard, pendingCard, admittedCard);
+                    SetComboSelectedValue(sampleCombo, sampleId);
+                    refreshOverview();
                 }
                 catch (Exception ex)
                 {
@@ -579,7 +790,12 @@ namespace Proiect_admitere_facultate
         {
             PagePanel page = NewPage();
             AddPageHeading(page, "Lista candidaților",
-                "Caută, verifică și actualizează înregistrările importate.");
+                "Vezi datele complete primite din formular, pe eșantionul selectat.");
+
+            ComboBox sampleCombo = CreateSampleCombo();
+            sampleCombo.SetBounds(page.Width - 315, 32, 275, 36);
+            sampleCombo.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            page.Controls.Add(sampleCombo);
 
             GlassPanel toolbar = new GlassPanel
             {
@@ -656,9 +872,10 @@ namespace Proiect_admitere_facultate
 
             Action loadAll = delegate
             {
-                LoadCandidatesGrid(grid, null, null);
+                LoadCandidatesGrid(grid, SelectedSampleId(sampleCombo), null, null);
             };
             loadAll();
+            sampleCombo.SelectedIndexChanged += delegate { loadAll(); };
             refresh.Click += delegate { value.Clear(); loadAll(); };
             search.Click += delegate
             {
@@ -668,7 +885,8 @@ namespace Proiect_admitere_facultate
                     loadAll();
                     return;
                 }
-                LoadCandidatesGrid(grid, criterion.SelectedItem.ToString(), entered);
+                LoadCandidatesGrid(grid, SelectedSampleId(sampleCombo),
+                    criterion.SelectedItem.ToString(), entered);
             };
             value.KeyDown += delegate(object sender, KeyEventArgs e)
             {
@@ -729,7 +947,7 @@ namespace Proiect_admitere_facultate
         {
             PagePanel page = NewPage();
             AddPageHeading(page, "Repartizarea candidaților",
-                "Candidații sunt ordonați după medie și repartizați în ordinea opțiunilor.");
+                "Alege eșantionul și algoritmul, apoi generează rezultatele separat.");
 
             GlassPanel controlsCard = new GlassPanel
             {
@@ -745,6 +963,14 @@ namespace Proiect_admitere_facultate
                 9.2F, FontStyle.Regular, ModernPalette.Muted);
             statusText.SetBounds(30, 71, 520, 25);
             controlsCard.Controls.Add(statusText);
+
+            ComboBox sampleCombo = CreateSampleCombo();
+            sampleCombo.SetBounds(30, 94, 245, 34);
+            controlsCard.Controls.Add(sampleCombo);
+
+            ComboBox algorithm = CreateAlgorithmCombo();
+            algorithm.SetBounds(292, 94, 265, 34);
+            controlsCard.Controls.Add(algorithm);
 
             SmoothButton run = new SmoothButton
             {
@@ -780,13 +1006,20 @@ namespace Proiect_admitere_facultate
                              AnchorStyles.Left | AnchorStyles.Right;
             resultsCard.Controls.Add(results);
 
-            Action loadResults = delegate { LoadAdmissionResults(results); };
+            Action loadResults = delegate
+            {
+                LoadAdmissionResults(results, SelectedSampleId(sampleCombo),
+                    SelectedAlgorithm(algorithm));
+            };
             loadResults();
+            sampleCombo.SelectedIndexChanged += delegate { loadResults(); };
+            algorithm.SelectedIndexChanged += delegate { loadResults(); };
             run.Click += delegate
             {
                 try
                 {
-                    int count = DatabaseManager.RunAdmission();
+                    int count = DatabaseManager.RunAdmission(
+                        SelectedSampleId(sampleCombo), SelectedAlgorithm(algorithm));
                     statusText.Text = "Repartizare finalizată • " + count + " candidați admiși";
                     statusText.ForeColor = ModernPalette.Green;
                     loadResults();
@@ -804,7 +1037,8 @@ namespace Proiect_admitere_facultate
                     return;
                 try
                 {
-                    DatabaseManager.ResetAdmission();
+                    DatabaseManager.ResetAdmission(
+                        SelectedSampleId(sampleCombo), SelectedAlgorithm(algorithm));
                     statusText.Text = "Rezultatele au fost resetate.";
                     statusText.ForeColor = ModernPalette.Muted;
                     loadResults();
@@ -909,7 +1143,8 @@ namespace Proiect_admitere_facultate
                 Font = new Font("Segoe UI", 10F)
             };
             combo.Items.AddRange(items);
-            combo.SelectedIndex = 0;
+            if (items.Length > 0)
+                combo.SelectedIndex = 0;
             return combo;
         }
 
@@ -922,6 +1157,139 @@ namespace Proiect_admitere_facultate
                 ForeColor = ModernPalette.Ink,
                 Font = new Font("Segoe UI", 11F)
             };
+        }
+
+        private static ComboBox CreateSampleCombo()
+        {
+            ComboBox combo = StyledCombo(new string[0]);
+            combo.DisplayMember = "Nume";
+            combo.ValueMember = "IdEsantion";
+            ReloadSampleCombo(combo);
+            return combo;
+        }
+
+        private static void ReloadSampleCombo(ComboBox combo)
+        {
+            int selectedId = SelectedSampleId(combo);
+            combo.DataSource = DatabaseManager.GetSamples();
+            combo.DisplayMember = "Nume";
+            combo.ValueMember = "IdEsantion";
+            if (selectedId > 0)
+                SetComboSelectedValue(combo, selectedId);
+        }
+
+        private static int SelectedSampleId(ComboBox combo)
+        {
+            if (combo == null)
+                return DatabaseManager.GetDefaultSampleId();
+            if (combo.SelectedValue == null)
+                return DatabaseManager.GetDefaultSampleId();
+
+            DataRowView row = combo.SelectedItem as DataRowView;
+            if (row != null)
+                return Convert.ToInt32(row["IdEsantion"]);
+
+            int id;
+            if (int.TryParse(combo.SelectedValue.ToString(), out id))
+                return id;
+
+            return DatabaseManager.GetDefaultSampleId();
+        }
+
+        private static void SetComboSelectedValue(ComboBox combo, int id)
+        {
+            if (combo == null || id <= 0)
+                return;
+
+            combo.SelectedValue = id;
+        }
+
+        private static ComboBox CreateAlgorithmCombo()
+        {
+            ComboBox combo = StyledCombo(new string[0]);
+            combo.Items.Add(new SelectItem("Standard: 70% BAC + 30% liceu", "weighted"));
+            combo.Items.Add(new SelectItem("Prioritate BAC", "bac"));
+            combo.Items.Add(new SelectItem("Prioritate liceu", "liceu"));
+            combo.Items.Add(new SelectItem("Medie egală BAC/Liceu", "balanced"));
+            combo.SelectedIndex = 0;
+            return combo;
+        }
+
+        private static string SelectedAlgorithm(ComboBox combo)
+        {
+            SelectItem item = combo.SelectedItem as SelectItem;
+            return item == null ? "weighted" : item.Value;
+        }
+
+        private static void LoadDashboardOverview(
+            DashboardOverviewPanel overview, int sampleId)
+        {
+            DataRow summary = DatabaseManager.GetSampleSummary(sampleId);
+            if (summary == null)
+            {
+                overview.SampleName = "—";
+                overview.Total = overview.Pending = overview.Admitted =
+                    overview.Rejected = overview.Imported = 0;
+            }
+            else
+            {
+                overview.SampleName = summary["Nume"].ToString();
+                overview.Total = ToInt(summary["Total"]);
+                overview.Pending = ToInt(summary["Nedefinit"]);
+                overview.Admitted = ToInt(summary["Admisi"]);
+                overview.Rejected = ToInt(summary["Respinsi"]);
+                overview.Imported = ToInt(summary["Importate"]);
+            }
+            overview.Invalidate();
+        }
+
+        private static int ToInt(object value)
+        {
+            return value == null || value == DBNull.Value
+                ? 0
+                : Convert.ToInt32(value);
+        }
+
+        private static string PromptForText(
+            string title, string labelText, string defaultValue)
+        {
+            using (Form prompt = new Form())
+            using (Label label = new Label())
+            using (TextBox textBox = new TextBox())
+            using (Button ok = new Button())
+            using (Button cancel = new Button())
+            {
+                prompt.Text = title;
+                prompt.StartPosition = FormStartPosition.CenterParent;
+                prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+                prompt.MinimizeBox = false;
+                prompt.MaximizeBox = false;
+                prompt.ClientSize = new Size(430, 150);
+                prompt.Font = new Font("Segoe UI", 10F);
+
+                label.Text = labelText;
+                label.SetBounds(18, 18, 390, 24);
+                textBox.Text = defaultValue;
+                textBox.SetBounds(18, 50, 392, 30);
+
+                ok.Text = "OK";
+                ok.DialogResult = DialogResult.OK;
+                ok.SetBounds(214, 102, 92, 32);
+                cancel.Text = "Anulează";
+                cancel.DialogResult = DialogResult.Cancel;
+                cancel.SetBounds(318, 102, 92, 32);
+
+                prompt.Controls.Add(label);
+                prompt.Controls.Add(textBox);
+                prompt.Controls.Add(ok);
+                prompt.Controls.Add(cancel);
+                prompt.AcceptButton = ok;
+                prompt.CancelButton = cancel;
+
+                return prompt.ShowDialog() == DialogResult.OK
+                    ? textBox.Text.Trim()
+                    : null;
+            }
         }
 
         private static DataGridView CreateGrid()
@@ -961,12 +1329,18 @@ namespace Proiect_admitere_facultate
         }
 
         private static void LoadCandidatesGrid(
-            DataGridView grid, string criterion, string value)
+            DataGridView grid, int sampleId, string criterion, string value)
         {
             const string baseQuery = @"
                 SELECT
                     C.IdCandidat AS [ID],
-                    C.Nume || ' ' || C.Prenume AS [Nume complet],
+                    E.Nume AS [Eșantion],
+                    C.Nume AS [Nume],
+                    C.Prenume AS [Prenume],
+                    C.Adresa AS [Adresă],
+                    C.Varsta AS [Vârstă],
+                    C.Sex AS [Sex],
+                    C.CNP AS [CNP],
                     C.MedieBAC AS [BAC],
                     C.MedieLiceu AS [Liceu],
                     ROUND(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7, 2)
@@ -974,9 +1348,12 @@ namespace Proiect_admitere_facultate
                     S1.NumeSpecializare AS [Opțiunea 1],
                     S2.NumeSpecializare AS [Opțiunea 2],
                     S3.NumeSpecializare AS [Opțiunea 3],
-                    C.CNP,
-                    C.Status
+                    C.Status AS [Status],
+                    IFNULL(I.CodInscriere, '') AS [Cod formular],
+                    IFNULL(I.CreatLaFormular, '') AS [Trimis online],
+                    IFNULL(I.ImportatLa, '') AS [Importat în aplicație]
                 FROM Candidati C
+                INNER JOIN Esantioane E ON C.IdEsantion = E.IdEsantion
                 LEFT JOIN
                 (
                     SELECT O.*
@@ -992,19 +1369,20 @@ namespace Proiect_admitere_facultate
                 ) O ON C.IdCandidat = O.IdCandidat
                 LEFT JOIN Specializari S1 ON O.IdSpecializare1 = S1.IdSpecializare
                 LEFT JOIN Specializari S2 ON O.IdSpecializare2 = S2.IdSpecializare
-                LEFT JOIN Specializari S3 ON O.IdSpecializare3 = S3.IdSpecializare";
+                LEFT JOIN Specializari S3 ON O.IdSpecializare3 = S3.IdSpecializare
+                LEFT JOIN ImporturiWeb I ON I.IdCandidat = C.IdCandidat";
 
-            string where = string.Empty;
+            string where = " WHERE C.IdEsantion = @SampleId";
             IDbDataParameter parameter = null;
             if (criterion == "Nume")
             {
-                where = " WHERE C.Nume LIKE @Value OR C.Prenume LIKE @Value";
+                where += " AND (C.Nume LIKE @Value OR C.Prenume LIKE @Value)";
                 parameter = DatabaseManager.CreateParameter(
                     "@Value", "%" + value + "%");
             }
             else if (criterion == "CNP")
             {
-                where = " WHERE C.CNP = @Value";
+                where += " AND C.CNP = @Value";
                 parameter = DatabaseManager.CreateParameter("@Value", value);
             }
             else if (criterion == "ID")
@@ -1015,21 +1393,25 @@ namespace Proiect_admitere_facultate
                     MessageBox.Show("ID-ul trebuie să fie numeric.");
                     return;
                 }
-                where = " WHERE C.IdCandidat = @Value";
+                where += " AND C.IdCandidat = @Value";
                 parameter = DatabaseManager.CreateParameter("@Value", id);
             }
             else if (criterion == "Status")
             {
-                where = " WHERE C.Status = @Value";
+                where += " AND C.Status = @Value";
                 parameter = DatabaseManager.CreateParameter("@Value", value);
             }
 
             try
             {
                 grid.DataSource = parameter == null
-                    ? DatabaseManager.ExecuteQuery(baseQuery + " ORDER BY C.IdCandidat")
+                    ? DatabaseManager.ExecuteQuery(
+                        baseQuery + where + " ORDER BY C.IdCandidat",
+                        DatabaseManager.CreateParameter("@SampleId", sampleId))
                     : DatabaseManager.ExecuteQuery(
-                        baseQuery + where + " ORDER BY C.IdCandidat", parameter);
+                        baseQuery + where + " ORDER BY C.IdCandidat",
+                        DatabaseManager.CreateParameter("@SampleId", sampleId),
+                        parameter);
             }
             catch (Exception ex)
             {
@@ -1048,24 +1430,30 @@ namespace Proiect_admitere_facultate
                 grid.CurrentRow.Cells["ID"].Value.ToString(), out candidateId);
         }
 
-        private static void LoadAdmissionResults(DataGridView grid)
+        private static void LoadAdmissionResults(
+            DataGridView grid, int sampleId, string algorithm)
         {
-            const string query = @"
+            string scoreExpression = DatabaseManager.GetAlgorithmExpression(algorithm);
+            string query = @"
                 SELECT
                     C.IdCandidat AS [ID],
                     C.Nume || ' ' || C.Prenume AS [Nume complet],
                     F.NumeFacultate AS [Facultate],
                     S.NumeSpecializare AS [Specializare],
-                    ROUND(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7, 2)
+                    ROUND(" + scoreExpression + @", 2)
                         AS [Medie finală]
                 FROM AdmitereFinala A
                 INNER JOIN Candidati C ON A.IdCandidat = C.IdCandidat
                 INNER JOIN Specializari S ON A.IdSpecializare = S.IdSpecializare
                 INNER JOIN Facultati F ON S.IdFacultate = F.IdFacultate
+                WHERE A.IdEsantion = @IdEsantion
+                  AND A.Algoritm = @Algoritm
                 ORDER BY [Medie finală] DESC";
             try
             {
-                grid.DataSource = DatabaseManager.ExecuteQuery(query);
+                grid.DataSource = DatabaseManager.ExecuteQuery(query,
+                    DatabaseManager.CreateParameter("@IdEsantion", sampleId),
+                    DatabaseManager.CreateParameter("@Algoritm", algorithm));
             }
             catch (Exception ex)
             {

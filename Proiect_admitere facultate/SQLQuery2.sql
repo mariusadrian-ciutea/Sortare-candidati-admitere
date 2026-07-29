@@ -4,6 +4,14 @@ DROP TABLE IF EXISTS OptiuniCandidat;
 DROP TABLE IF EXISTS Candidati;
 DROP TABLE IF EXISTS Specializari;
 DROP TABLE IF EXISTS Facultati;
+DROP TABLE IF EXISTS Esantioane;
+
+CREATE TABLE Esantioane (
+    IdEsantion INTEGER PRIMARY KEY AUTOINCREMENT,
+    Nume TEXT NOT NULL UNIQUE,
+    CreatLa TEXT NOT NULL DEFAULT (datetime('now')),
+    EsteImplicit INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE Facultati (
     IdFacultate INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,6 +29,7 @@ CREATE TABLE Specializari (
 
 CREATE TABLE Candidati (
     IdCandidat INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdEsantion INTEGER NOT NULL DEFAULT 1,
     Nume TEXT NOT NULL,
     Prenume TEXT NOT NULL,
     Adresa TEXT NULL,
@@ -30,7 +39,8 @@ CREATE TABLE Candidati (
     MedieBAC REAL CHECK (MedieBAC BETWEEN 1 AND 10),
     MedieLiceu REAL CHECK (MedieLiceu BETWEEN 1 AND 10),
     Status TEXT NOT NULL DEFAULT 'Nedefinit'
-        CHECK (Status IN ('Nedefinit', 'Respins', 'Admis'))
+        CHECK (Status IN ('Nedefinit', 'Respins', 'Admis')),
+    FOREIGN KEY (IdEsantion) REFERENCES Esantioane(IdEsantion)
 );
 
 CREATE TABLE OptiuniCandidat (
@@ -47,10 +57,14 @@ CREATE TABLE OptiuniCandidat (
 
 CREATE TABLE AdmitereFinala (
     IdAdmitere INTEGER PRIMARY KEY AUTOINCREMENT,
+    IdEsantion INTEGER NOT NULL DEFAULT 1,
+    Algoritm TEXT NOT NULL DEFAULT 'weighted',
     IdCandidat INTEGER NOT NULL,
     IdSpecializare INTEGER NOT NULL,
+    FOREIGN KEY (IdEsantion) REFERENCES Esantioane(IdEsantion),
     FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
-    FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare)
+    FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare),
+    UNIQUE (IdEsantion, Algoritm, IdCandidat)
 );
 
 CREATE TABLE ImporturiWeb (
@@ -58,9 +72,13 @@ CREATE TABLE ImporturiWeb (
     ExternalId INTEGER NOT NULL UNIQUE,
     CodInscriere TEXT NOT NULL,
     IdCandidat INTEGER NOT NULL,
+    CreatLaFormular TEXT NULL,
     ImportatLa TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat)
 );
+
+INSERT INTO Esantioane (IdEsantion, Nume, EsteImplicit)
+VALUES (1, 'Eșantion principal', 1);
 
 INSERT INTO Facultati (NumeFacultate, Abreviere)
 VALUES
