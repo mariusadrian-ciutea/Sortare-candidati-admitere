@@ -1,6 +1,5 @@
 using System;
 using System.Data;
-using System.Data.SqlClient;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Threading.Tasks;
@@ -967,10 +966,10 @@ namespace Proiect_admitere_facultate
             const string baseQuery = @"
                 SELECT
                     C.IdCandidat AS [ID],
-                    C.Nume + ' ' + C.Prenume AS [Nume complet],
+                    C.Nume || ' ' || C.Prenume AS [Nume complet],
                     C.MedieBAC AS [BAC],
                     C.MedieLiceu AS [Liceu],
-                    CAST(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7 AS DECIMAL(5,2))
+                    ROUND(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7, 2)
                         AS [Medie],
                     S1.NumeSpecializare AS [Opțiunea 1],
                     S2.NumeSpecializare AS [Opțiunea 2],
@@ -996,17 +995,17 @@ namespace Proiect_admitere_facultate
                 LEFT JOIN Specializari S3 ON O.IdSpecializare3 = S3.IdSpecializare";
 
             string where = string.Empty;
-            SqlParameter parameter = null;
+            IDbDataParameter parameter = null;
             if (criterion == "Nume")
             {
                 where = " WHERE C.Nume LIKE @Value OR C.Prenume LIKE @Value";
-                parameter = new SqlParameter("@Value", SqlDbType.NVarChar, 100)
-                { Value = "%" + value + "%" };
+                parameter = DatabaseManager.CreateParameter(
+                    "@Value", "%" + value + "%");
             }
             else if (criterion == "CNP")
             {
                 where = " WHERE C.CNP = @Value";
-                parameter = new SqlParameter("@Value", SqlDbType.Char, 13) { Value = value };
+                parameter = DatabaseManager.CreateParameter("@Value", value);
             }
             else if (criterion == "ID")
             {
@@ -1017,13 +1016,12 @@ namespace Proiect_admitere_facultate
                     return;
                 }
                 where = " WHERE C.IdCandidat = @Value";
-                parameter = new SqlParameter("@Value", SqlDbType.Int) { Value = id };
+                parameter = DatabaseManager.CreateParameter("@Value", id);
             }
             else if (criterion == "Status")
             {
                 where = " WHERE C.Status = @Value";
-                parameter = new SqlParameter("@Value", SqlDbType.NVarChar, 20)
-                { Value = value };
+                parameter = DatabaseManager.CreateParameter("@Value", value);
             }
 
             try
@@ -1055,10 +1053,10 @@ namespace Proiect_admitere_facultate
             const string query = @"
                 SELECT
                     C.IdCandidat AS [ID],
-                    C.Nume + ' ' + C.Prenume AS [Nume complet],
+                    C.Nume || ' ' || C.Prenume AS [Nume complet],
                     F.NumeFacultate AS [Facultate],
                     S.NumeSpecializare AS [Specializare],
-                    CAST(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7 AS DECIMAL(5,2))
+                    ROUND(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7, 2)
                         AS [Medie finală]
                 FROM AdmitereFinala A
                 INNER JOIN Candidati C ON A.IdCandidat = C.IdCandidat

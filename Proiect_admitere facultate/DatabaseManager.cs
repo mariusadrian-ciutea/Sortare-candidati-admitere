@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
-using System.Data.SqlClient;
+using System.Data.SQLite;
 using System.IO;
 using System.Linq;
 
@@ -16,11 +16,11 @@ namespace Proiect_admitere_facultate
 
     internal static class DatabaseManager
     {
-        private const string DatabaseFileName = "Admitere_database.mdf";
-        private const string DatabaseLogFileName = "Admitere_database_log.ldf";
+        private const string DatabaseFileName = "Admitere_database.sqlite";
         private const string ApplicationDataFolderName = "Sortare candidati admitere";
         private static readonly object DatabaseLock = new object();
         private static string resolvedDatabasePath;
+        private static bool databaseReady;
 
         public static string DatabasePath
         {
@@ -29,46 +29,56 @@ namespace Proiect_admitere_facultate
 
         public static string connectionString
         {
-            get
-            {
-                return BuildAttachConnectionString(DatabasePath);
-            }
+            get { return BuildConnectionString(DatabasePath); }
+        }
+
+        public static IDbDataParameter CreateParameter(string name, object value)
+        {
+            return new SQLiteParameter(name, value ?? DBNull.Value);
         }
 
         private static string ResolveDatabasePath()
         {
             lock (DatabaseLock)
             {
-                if (!string.IsNullOrEmpty(resolvedDatabasePath) &&
-                    File.Exists(resolvedDatabasePath))
+                if (!string.IsNullOrEmpty(resolvedDatabasePath) && databaseReady)
                     return resolvedDatabasePath;
 
                 string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 string outputDatabase = Path.Combine(baseDirectory, DatabaseFileName);
                 if (File.Exists(outputDatabase))
-                    return resolvedDatabasePath = outputDatabase;
+                    return SetReadyDatabase(outputDatabase);
 
-                // Permite pornirea direct din Visual Studio cu o baza existenta in proiect.
                 string projectDatabase = Path.GetFullPath(
                     Path.Combine(baseDirectory, "..", "..", DatabaseFileName));
                 if (File.Exists(projectDatabase))
-                    return resolvedDatabasePath = projectDatabase;
+                    return SetReadyDatabase(projectDatabase);
 
                 string writableDatabase = Path.Combine(
                     ResolveWritableDatabaseDirectory(), DatabaseFileName);
-
-                if (!File.Exists(writableDatabase))
-                    CreateFreshDatabase(writableDatabase);
-
-                return resolvedDatabasePath = writableDatabase;
+                return SetReadyDatabase(writableDatabase);
             }
         }
 
-        private static string BuildAttachConnectionString(string databasePath)
+        private static string SetReadyDatabase(string databasePath)
         {
-            return string.Format(
-                @"Data Source=(LocalDB)\MSSQLLocalDB;AttachDbFilename={0};Integrated Security=True;Connect Timeout=15",
-                databasePath);
+            resolvedDatabasePath = databasePath;
+            EnsureDatabaseReady(databasePath);
+            databaseReady = true;
+            return resolvedDatabasePath;
+        }
+
+        private static string BuildConnectionString(string databasePath)
+        {
+            SQLiteConnectionStringBuilder builder =
+                new SQLiteConnectionStringBuilder
+                {
+                    DataSource = databasePath,
+                    Version = 3,
+                    ForeignKeys = true,
+                    Pooling = true
+                };
+            return builder.ToString();
         }
 
         private static string ResolveWritableDatabaseDirectory()
@@ -95,7 +105,24 @@ namespace Proiect_admitere_facultate
             return Path.Combine(localAppData, ApplicationDataFolderName);
         }
 
-        private static void CreateFreshDatabase(string databasePath)
+        private static SQLiteConnection OpenConnection()
+        {
+            SQLiteConnection connection = new SQLiteConnection(connectionString);
+            connection.Open();
+            EnablePragmas(connection);
+            return connection;
+        }
+
+        private static void EnablePragmas(SQLiteConnection connection)
+        {
+            using (SQLiteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = "PRAGMA foreign_keys = ON;";
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static void EnsureDatabaseReady(string databasePath)
         {
             string databaseDirectory = Path.GetDirectoryName(databasePath);
             if (string.IsNullOrWhiteSpace(databaseDirectory))
@@ -104,354 +131,202 @@ namespace Proiect_admitere_facultate
 
             Directory.CreateDirectory(databaseDirectory);
 
-            string logPath = Path.Combine(databaseDirectory, DatabaseLogFileName);
-            if (File.Exists(logPath))
+            using (SQLiteConnection connection =
+                   new SQLiteConnection(BuildConnectionString(databasePath)))
+            using (SQLiteCommand command = connection.CreateCommand())
             {
-                logPath = Path.Combine(databaseDirectory,
-                    Path.GetFileNameWithoutExtension(DatabaseFileName) + "_" +
-                    Guid.NewGuid().ToString("N") + "_log.ldf");
-            }
-
-            string databaseName = "Admitere_" + Guid.NewGuid().ToString("N");
-
-            try
-            {
-                using (SqlConnection connection = new SqlConnection(
-                    @"Data Source=(LocalDB)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=True;Connect Timeout=15"))
-                using (SqlCommand command = connection.CreateCommand())
-                {
-                    command.CommandTimeout = 60;
-                    command.CommandText = string.Format(@"
-                        CREATE DATABASE [{0}]
-                        ON PRIMARY
-                        (
-                            NAME = N'{0}_data',
-                            FILENAME = N'{1}'
-                        )
-                        LOG ON
-                        (
-                            NAME = N'{0}_log',
-                            FILENAME = N'{2}'
-                        )",
-                        databaseName,
-                        EscapeSqlLiteral(databasePath),
-                        EscapeSqlLiteral(logPath));
-
-                    connection.Open();
-                    command.ExecuteNonQuery();
-                }
-
-                InitializeFreshDatabase(databasePath);
-            }
-            catch (Exception ex)
-            {
-                TryDropDatabase(databaseName);
-                throw new InvalidOperationException(
-                    "Baza de date locala nu a putut fi creata automat. " +
-                    "Verifica daca Microsoft SQL Server LocalDB este instalat si pornit.",
-                    ex);
-            }
-        }
-
-        private static string EscapeSqlLiteral(string value)
-        {
-            return value.Replace("'", "''");
-        }
-
-        private static void TryDropDatabase(string databaseName)
-        {
-            try
-            {
-                using (SqlConnection connection = new SqlConnection(
-                    @"Data Source=(LocalDB)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=True;Connect Timeout=15"))
-                using (SqlCommand command = connection.CreateCommand())
-                {
-                    command.CommandTimeout = 30;
-                    command.CommandText = string.Format(@"
-                        IF DB_ID(N'{0}') IS NOT NULL
-                        BEGIN
-                            ALTER DATABASE [{0}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-                            DROP DATABASE [{0}];
-                        END",
-                        databaseName);
-
-                    connection.Open();
-                    command.ExecuteNonQuery();
-                }
-            }
-            catch
-            {
-                // Daca initializarea a esuat, eroarea originala este mai utila.
-            }
-        }
-
-        private static void InitializeFreshDatabase(string databasePath)
-        {
-            using (SqlConnection connection = new SqlConnection(
-                BuildAttachConnectionString(databasePath)))
-            using (SqlCommand command = connection.CreateCommand())
-            {
-                command.CommandTimeout = 60;
                 connection.Open();
+                EnablePragmas(connection);
                 command.CommandText = InitialSchemaSql;
                 command.ExecuteNonQuery();
             }
         }
 
-        private static void EnsureRuntimeTables(SqlConnection connection)
-        {
-            const string query = @"
-                IF OBJECT_ID('ImporturiWeb', 'U') IS NULL
-                BEGIN
-                    CREATE TABLE ImporturiWeb
-                    (
-                        IdImport INT IDENTITY(1,1) PRIMARY KEY,
-                        ExternalId INT NOT NULL UNIQUE,
-                        CodInscriere NVARCHAR(40) NOT NULL,
-                        IdCandidat INT NOT NULL,
-                        ImportatLa DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                        CONSTRAINT FK_ImporturiWeb_Candidati
-                            FOREIGN KEY (IdCandidat)
-                            REFERENCES Candidati(IdCandidat)
-                    )
-                END";
-
-            using (SqlCommand command = new SqlCommand(query, connection))
-                command.ExecuteNonQuery();
-        }
-
         private const string InitialSchemaSql = @"
-            CREATE TABLE Facultati
+            CREATE TABLE IF NOT EXISTS Facultati
             (
-                IdFacultate INT IDENTITY(1,1) PRIMARY KEY,
-                NumeFacultate NVARCHAR(100) COLLATE Romanian_CI_AS NOT NULL,
-                Abreviere NVARCHAR(10) COLLATE Romanian_CI_AS NOT NULL
+                IdFacultate INTEGER PRIMARY KEY AUTOINCREMENT,
+                NumeFacultate TEXT NOT NULL,
+                Abreviere TEXT NOT NULL UNIQUE
             );
 
-            CREATE TABLE Specializari
+            CREATE TABLE IF NOT EXISTS Specializari
             (
-                IdSpecializare INT IDENTITY(1,1) PRIMARY KEY,
-                NumeSpecializare NVARCHAR(100) COLLATE Romanian_CI_AS NOT NULL,
-                NrLocuri INT NOT NULL CHECK (NrLocuri > 0),
-                IdFacultate INT NOT NULL,
-                CONSTRAINT FK_Specializari_Facultati
-                    FOREIGN KEY (IdFacultate) REFERENCES Facultati(IdFacultate)
+                IdSpecializare INTEGER PRIMARY KEY AUTOINCREMENT,
+                NumeSpecializare TEXT NOT NULL UNIQUE,
+                NrLocuri INTEGER NOT NULL CHECK (NrLocuri > 0),
+                IdFacultate INTEGER NOT NULL,
+                FOREIGN KEY (IdFacultate) REFERENCES Facultati(IdFacultate)
             );
 
-            CREATE TABLE Candidati
+            CREATE TABLE IF NOT EXISTS Candidati
             (
-                IdCandidat INT IDENTITY(1,1) PRIMARY KEY,
-                Nume NVARCHAR(50) COLLATE Romanian_CI_AS NOT NULL,
-                Prenume NVARCHAR(50) COLLATE Romanian_CI_AS NOT NULL,
-                Adresa NVARCHAR(100) COLLATE Romanian_CI_AS NULL,
-                Varsta INT CHECK (Varsta > 0),
-                Sex NVARCHAR(10) COLLATE Romanian_CI_AS
-                    CHECK (Sex IN ('Feminin', 'Masculin')),
-                CNP CHAR(13) NOT NULL UNIQUE,
-                MedieBAC FLOAT CHECK (MedieBAC BETWEEN 1 AND 10),
-                MedieLiceu FLOAT CHECK (MedieLiceu BETWEEN 1 AND 10),
-                Status NVARCHAR(20) COLLATE Romanian_CI_AS
-                    CONSTRAINT DF_Candidati_Status DEFAULT 'Nedefinit'
+                IdCandidat INTEGER PRIMARY KEY AUTOINCREMENT,
+                Nume TEXT NOT NULL,
+                Prenume TEXT NOT NULL,
+                Adresa TEXT NULL,
+                Varsta INTEGER CHECK (Varsta > 0),
+                Sex TEXT CHECK (Sex IN ('Feminin', 'Masculin')),
+                CNP TEXT NOT NULL UNIQUE,
+                MedieBAC REAL CHECK (MedieBAC BETWEEN 1 AND 10),
+                MedieLiceu REAL CHECK (MedieLiceu BETWEEN 1 AND 10),
+                Status TEXT NOT NULL DEFAULT 'Nedefinit'
                     CHECK (Status IN ('Nedefinit', 'Respins', 'Admis'))
             );
 
-            CREATE TABLE OptiuniCandidat
+            CREATE TABLE IF NOT EXISTS OptiuniCandidat
             (
-                IdOptiune INT IDENTITY(1,1) PRIMARY KEY,
-                IdCandidat INT NOT NULL,
-                IdSpecializare1 INT NOT NULL,
-                IdSpecializare2 INT NULL,
-                IdSpecializare3 INT NULL,
-                CONSTRAINT FK_Optiuni_Candidati
-                    FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
-                CONSTRAINT FK_Optiuni_Specializare1
-                    FOREIGN KEY (IdSpecializare1) REFERENCES Specializari(IdSpecializare),
-                CONSTRAINT FK_Optiuni_Specializare2
-                    FOREIGN KEY (IdSpecializare2) REFERENCES Specializari(IdSpecializare),
-                CONSTRAINT FK_Optiuni_Specializare3
-                    FOREIGN KEY (IdSpecializare3) REFERENCES Specializari(IdSpecializare)
+                IdOptiune INTEGER PRIMARY KEY AUTOINCREMENT,
+                IdCandidat INTEGER NOT NULL,
+                IdSpecializare1 INTEGER NOT NULL,
+                IdSpecializare2 INTEGER NULL,
+                IdSpecializare3 INTEGER NULL,
+                FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
+                FOREIGN KEY (IdSpecializare1) REFERENCES Specializari(IdSpecializare),
+                FOREIGN KEY (IdSpecializare2) REFERENCES Specializari(IdSpecializare),
+                FOREIGN KEY (IdSpecializare3) REFERENCES Specializari(IdSpecializare)
             );
 
-            CREATE TABLE AdmitereFinala
+            CREATE TABLE IF NOT EXISTS AdmitereFinala
             (
-                IdAdmitere INT IDENTITY(1,1) PRIMARY KEY,
-                IdCandidat INT NOT NULL,
-                IdSpecializare INT NOT NULL,
-                CONSTRAINT FK_AdmitereFinala_Candidati
-                    FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
-                CONSTRAINT FK_AdmitereFinala_Specializari
-                    FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare)
+                IdAdmitere INTEGER PRIMARY KEY AUTOINCREMENT,
+                IdCandidat INTEGER NOT NULL,
+                IdSpecializare INTEGER NOT NULL,
+                FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat),
+                FOREIGN KEY (IdSpecializare) REFERENCES Specializari(IdSpecializare)
             );
 
-            CREATE TABLE ImporturiWeb
+            CREATE TABLE IF NOT EXISTS ImporturiWeb
             (
-                IdImport INT IDENTITY(1,1) PRIMARY KEY,
-                ExternalId INT NOT NULL UNIQUE,
-                CodInscriere NVARCHAR(40) NOT NULL,
-                IdCandidat INT NOT NULL,
-                ImportatLa DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                CONSTRAINT FK_ImporturiWeb_Candidati
-                    FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat)
+                IdImport INTEGER PRIMARY KEY AUTOINCREMENT,
+                ExternalId INTEGER NOT NULL UNIQUE,
+                CodInscriere TEXT NOT NULL,
+                IdCandidat INTEGER NOT NULL,
+                ImportatLa TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (IdCandidat) REFERENCES Candidati(IdCandidat)
             );
 
-            INSERT INTO Facultati (NumeFacultate, Abreviere)
+            INSERT OR IGNORE INTO Facultati (NumeFacultate, Abreviere)
             VALUES
-                (N'Facultatea de Cibernetică, Statistică și Informatică Economică', N'CSIE'),
-                (N'Facultatea de Management', N'MAN'),
-                (N'Facultatea de Contabilitate și Informatică de Gestiune', N'CIG'),
-                (N'Facultatea de Marketing', N'MK'),
-                (N'Facultatea de Finanțe, Asigurări, Bănci și Burse de Valori', N'FABBV'),
-                (N'Facultatea de Relații Economice Internaționale', N'REI'),
-                (N'Facultatea de Economie Teoretică și Aplicată', N'ETA');
+                ('Facultatea de Cibernetică, Statistică și Informatică Economică', 'CSIE'),
+                ('Facultatea de Management', 'MAN'),
+                ('Facultatea de Contabilitate și Informatică de Gestiune', 'CIG'),
+                ('Facultatea de Marketing', 'MK'),
+                ('Facultatea de Finanțe, Asigurări, Bănci și Burse de Valori', 'FABBV'),
+                ('Facultatea de Relații Economice Internaționale', 'REI'),
+                ('Facultatea de Economie Teoretică și Aplicată', 'ETA');
 
-            INSERT INTO Specializari (NumeSpecializare, NrLocuri, IdFacultate)
+            INSERT OR IGNORE INTO Specializari (NumeSpecializare, NrLocuri, IdFacultate)
             VALUES
-                (N'Cibernetică Economică', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'CSIE')),
-                (N'Informatică Economică', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'CSIE')),
-                (N'Statică economică și data science', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'CSIE')),
-                (N'Management', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'MAN')),
-                (N'Management (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'MAN')),
-                (N'Contabilitate și Informatică de Gestiune', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'CIG')),
-                (N'Contabilitate și Informatică de Gestiune (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'CIG')),
-                (N'Marketing', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'MK')),
-                (N'Marketing (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'MK')),
-                (N'Finanțe și Bănci', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'FABBV')),
-                (N'Finanțe și Bănci (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'FABBV')),
-                (N'Economie și afaceri internaționale', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'REI')),
-                (N'Economie și afaceri internaționale (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'REI')),
-                (N'Limbi moderne aplicate (engleză, franceză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'REI')),
-                (N'Economie și comunicare economică în afaceri', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = N'ETA'));";
+                ('Cibernetică Economică', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'CSIE')),
+                ('Informatică Economică', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'CSIE')),
+                ('Statică economică și data science', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'CSIE')),
+                ('Management', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'MAN')),
+                ('Management (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'MAN')),
+                ('Contabilitate și Informatică de Gestiune', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'CIG')),
+                ('Contabilitate și Informatică de Gestiune (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'CIG')),
+                ('Marketing', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'MK')),
+                ('Marketing (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'MK')),
+                ('Finanțe și Bănci', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'FABBV')),
+                ('Finanțe și Bănci (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'FABBV')),
+                ('Economie și afaceri internaționale', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'REI')),
+                ('Economie și afaceri internaționale (în limba engleză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'REI')),
+                ('Limbi moderne aplicate (engleză, franceză)', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'REI')),
+                ('Economie și comunicare economică în afaceri', 30, (SELECT IdFacultate FROM Facultati WHERE Abreviere = 'ETA'));";
 
         public static void ValidateDatabase()
         {
             const string query = @"
                 SELECT COUNT(*)
-                FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_NAME IN ('Candidati', 'Facultati', 'Specializari',
-                                     'OptiuniCandidat', 'AdmitereFinala')";
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name IN ('Candidati', 'Facultati', 'Specializari',
+                               'OptiuniCandidat', 'AdmitereFinala', 'ImporturiWeb')";
 
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            using (SqlCommand command = new SqlCommand(query, connection))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteCommand command = new SQLiteCommand(query, connection))
             {
-                connection.Open();
                 int tableCount = Convert.ToInt32(command.ExecuteScalar());
-                if (tableCount != 5)
+                if (tableCount != 6)
                     throw new InvalidOperationException(
-                        "Structura bazei de date este incompletă. Sunt necesare 5 tabele.");
-
-                EnsureRuntimeTables(connection);
+                        "Structura bazei de date este incompletă. Sunt necesare 6 tabele.");
             }
         }
 
-        public static DataTable ExecuteQuery(string query, params SqlParameter[] parameters)
+        public static DataTable ExecuteQuery(
+            string query, params IDbDataParameter[] parameters)
         {
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            using (SqlCommand command = new SqlCommand(query, connection))
-            using (SqlDataAdapter adapter = new SqlDataAdapter(command))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteCommand command = new SQLiteCommand(query, connection))
+            using (SQLiteDataAdapter adapter = new SQLiteDataAdapter(command))
             {
-                if (parameters != null && parameters.Length > 0)
-                    command.Parameters.AddRange(parameters);
-
+                AddParameters(command, parameters);
                 DataTable table = new DataTable();
-                connection.Open();
                 adapter.Fill(table);
                 return table;
             }
         }
 
-        public static int InsertUpdateOrDelete(string query, params SqlParameter[] parameters)
+        public static int InsertUpdateOrDelete(
+            string query, params IDbDataParameter[] parameters)
         {
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            using (SqlCommand command = new SqlCommand(query, connection))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteCommand command = new SQLiteCommand(query, connection))
             {
-                if (parameters != null && parameters.Length > 0)
-                    command.Parameters.AddRange(parameters);
-
-                connection.Open();
+                AddParameters(command, parameters);
                 return command.ExecuteNonQuery();
             }
         }
 
-        public static int SaveApplication(Candidat candidate, IList<string> specializationNames)
+        public static int SaveApplication(
+            Candidat candidate, IList<string> specializationNames)
         {
             if (candidate == null)
                 throw new ArgumentNullException("candidate");
             if (specializationNames == null || specializationNames.Count == 0)
-                throw new ArgumentException("Este necesară cel puțin o opțiune.", "specializationNames");
+                throw new ArgumentException(
+                    "Este necesară cel puțin o opțiune.", "specializationNames");
 
-            using (SqlConnection connection = new SqlConnection(connectionString))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
-                connection.Open();
-                using (SqlTransaction transaction = connection.BeginTransaction())
+                try
                 {
-                    try
+                    if (CandidateExistsByCnp(connection, transaction, candidate.CNP))
+                        throw new InvalidOperationException(
+                            "Există deja o înscriere pentru acest CNP.");
+
+                    using (SQLiteCommand command = new SQLiteCommand(@"
+                        INSERT INTO Candidati
+                            (Nume, Prenume, Adresa, Varsta, Sex, CNP,
+                             MedieBAC, MedieLiceu, Status)
+                        VALUES
+                            (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
+                             @MedieBAC, @MedieLiceu, 'Nedefinit')",
+                        connection, transaction))
                     {
-                        const string insertCandidate = @"
-                            INSERT INTO Candidati
-                                (Nume, Prenume, Adresa, Varsta, Sex, CNP, MedieBAC, MedieLiceu)
-                            OUTPUT INSERTED.IdCandidat
-                            VALUES
-                                (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP, @MedieBAC, @MedieLiceu)";
-
-                        int candidateId;
-                        using (SqlCommand command = new SqlCommand(insertCandidate, connection, transaction))
-                        {
-                            command.Parameters.Add("@Nume", SqlDbType.NVarChar, 50).Value = candidate.Nume;
-                            command.Parameters.Add("@Prenume", SqlDbType.NVarChar, 50).Value = candidate.Prenume;
-                            command.Parameters.Add("@Adresa", SqlDbType.NVarChar, 100).Value = candidate.Adresa;
-                            command.Parameters.Add("@Varsta", SqlDbType.Int).Value = candidate.Varsta;
-                            command.Parameters.Add("@Sex", SqlDbType.NVarChar, 10).Value = candidate.Sex;
-                            command.Parameters.Add("@CNP", SqlDbType.Char, 13).Value = candidate.CNP;
-                            command.Parameters.Add("@MedieBAC", SqlDbType.Float).Value = candidate.MedieBAC;
-                            command.Parameters.Add("@MedieLiceu", SqlDbType.Float).Value = candidate.MedieLiceu;
-                            candidateId = Convert.ToInt32(command.ExecuteScalar());
-                        }
-
-                        List<int> specializationIds = new List<int>();
-                        const string findSpecialization = @"
-                            SELECT IdSpecializare
-                            FROM Specializari
-                            WHERE NumeSpecializare = @NumeSpecializare";
-
-                        foreach (string specializationName in specializationNames.Take(3))
-                        {
-                            using (SqlCommand command = new SqlCommand(findSpecialization, connection, transaction))
-                            {
-                                command.Parameters.Add("@NumeSpecializare", SqlDbType.NVarChar, 100)
-                                    .Value = specializationName;
-                                object result = command.ExecuteScalar();
-                                if (result == null)
-                                    throw new InvalidOperationException(
-                                        "Specializarea „" + specializationName + "” nu există în baza de date.");
-                                specializationIds.Add(Convert.ToInt32(result));
-                            }
-                        }
-
-                        const string insertChoices = @"
-                            INSERT INTO OptiuniCandidat
-                                (IdCandidat, IdSpecializare1, IdSpecializare2, IdSpecializare3)
-                            VALUES
-                                (@IdCandidat, @Optiune1, @Optiune2, @Optiune3)";
-
-                        using (SqlCommand command = new SqlCommand(insertChoices, connection, transaction))
-                        {
-                            command.Parameters.Add("@IdCandidat", SqlDbType.Int).Value = candidateId;
-                            command.Parameters.Add("@Optiune1", SqlDbType.Int).Value = specializationIds[0];
-                            command.Parameters.Add("@Optiune2", SqlDbType.Int).Value =
-                                specializationIds.Count > 1 ? (object)specializationIds[1] : DBNull.Value;
-                            command.Parameters.Add("@Optiune3", SqlDbType.Int).Value =
-                                specializationIds.Count > 2 ? (object)specializationIds[2] : DBNull.Value;
-                            command.ExecuteNonQuery();
-                        }
-
-                        transaction.Commit();
-                        return candidateId;
+                        AddParameter(command, "@Nume", candidate.Nume);
+                        AddParameter(command, "@Prenume", candidate.Prenume);
+                        AddParameter(command, "@Adresa", candidate.Adresa);
+                        AddParameter(command, "@Varsta", candidate.Varsta);
+                        AddParameter(command, "@Sex", candidate.Sex);
+                        AddParameter(command, "@CNP", candidate.CNP);
+                        AddParameter(command, "@MedieBAC", candidate.MedieBAC);
+                        AddParameter(command, "@MedieLiceu", candidate.MedieLiceu);
+                        command.ExecuteNonQuery();
                     }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+
+                    int candidateId = Convert.ToInt32(connection.LastInsertRowId);
+                    InsertCandidateChoices(
+                        connection, transaction, candidateId, specializationNames);
+
+                    transaction.Commit();
+                    return candidateId;
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
                 }
             }
         }
@@ -463,187 +338,104 @@ namespace Proiect_admitere_facultate
             if (submission.options == null || submission.options.Count == 0)
                 throw new InvalidOperationException("Înscrierea nu conține opțiuni.");
 
-            using (SqlConnection connection = new SqlConnection(connectionString))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
-                connection.Open();
-                using (SqlTransaction transaction = connection.BeginTransaction())
+                try
                 {
-                    try
+                    using (SQLiteCommand checkImport = new SQLiteCommand(@"
+                        SELECT IdCandidat
+                        FROM ImporturiWeb
+                        WHERE ExternalId = @ExternalId",
+                        connection, transaction))
                     {
-                        const string createImportTable = @"
-                            IF OBJECT_ID('ImporturiWeb', 'U') IS NULL
-                            BEGIN
-                                CREATE TABLE ImporturiWeb
-                                (
-                                    IdImport INT IDENTITY(1,1) PRIMARY KEY,
-                                    ExternalId INT NOT NULL UNIQUE,
-                                    CodInscriere NVARCHAR(40) NOT NULL,
-                                    IdCandidat INT NOT NULL,
-                                    ImportatLa DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-                                    CONSTRAINT FK_ImporturiWeb_Candidati
-                                        FOREIGN KEY (IdCandidat)
-                                        REFERENCES Candidati(IdCandidat)
-                                )
-                            END";
-                        using (SqlCommand command = new SqlCommand(
-                            createImportTable, connection, transaction))
-                            command.ExecuteNonQuery();
-
-                        using (SqlCommand checkImport = new SqlCommand(
-                            "SELECT IdCandidat FROM ImporturiWeb WHERE ExternalId = @ExternalId",
-                            connection, transaction))
+                        AddParameter(checkImport, "@ExternalId", submission.id);
+                        if (checkImport.ExecuteScalar() != null)
                         {
-                            checkImport.Parameters.Add("@ExternalId", SqlDbType.Int)
-                                .Value = submission.id;
-                            if (checkImport.ExecuteScalar() != null)
-                            {
-                                transaction.Commit();
-                                return ImportResult.AlreadyPresent;
-                            }
+                            transaction.Commit();
+                            return ImportResult.AlreadyPresent;
                         }
+                    }
 
-                        int candidateId = 0;
-                        using (SqlCommand checkCnp = new SqlCommand(
-                            "SELECT IdCandidat FROM Candidati WHERE CNP = @CNP",
-                            connection, transaction))
-                        {
-                            checkCnp.Parameters.Add("@CNP", SqlDbType.Char, 13)
-                                .Value = submission.cnp;
-                            object existingCandidate = checkCnp.ExecuteScalar();
-                            if (existingCandidate != null)
-                                candidateId = Convert.ToInt32(existingCandidate);
-                        }
+                    int candidateId = FindCandidateIdByCnp(
+                        connection, transaction, submission.cnp);
+                    ImportResult result = ImportResult.AlreadyPresent;
 
-                        ImportResult result = ImportResult.AlreadyPresent;
-                        if (candidateId == 0)
-                        {
-                            const string insertCandidate = @"
-                                INSERT INTO Candidati
-                                    (Nume, Prenume, Adresa, Varsta, Sex, CNP,
-                                     MedieBAC, MedieLiceu, Status)
-                                OUTPUT INSERTED.IdCandidat
-                                VALUES
-                                    (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
-                                     @MedieBAC, @MedieLiceu, 'Nedefinit')";
-                            using (SqlCommand command = new SqlCommand(
-                                insertCandidate, connection, transaction))
-                            {
-                                command.Parameters.Add("@Nume", SqlDbType.NVarChar, 50)
-                                    .Value = submission.nume;
-                                command.Parameters.Add("@Prenume", SqlDbType.NVarChar, 50)
-                                    .Value = submission.prenume;
-                                command.Parameters.Add("@Adresa", SqlDbType.NVarChar, 100)
-                                    .Value = submission.adresa;
-                                command.Parameters.Add("@Varsta", SqlDbType.Int)
-                                    .Value = submission.varsta;
-                                command.Parameters.Add("@Sex", SqlDbType.NVarChar, 10)
-                                    .Value = submission.sex;
-                                command.Parameters.Add("@CNP", SqlDbType.Char, 13)
-                                    .Value = submission.cnp;
-                                command.Parameters.Add("@MedieBAC", SqlDbType.Float)
-                                    .Value = submission.medieBac;
-                                command.Parameters.Add("@MedieLiceu", SqlDbType.Float)
-                                    .Value = submission.medieLiceu;
-                                candidateId = Convert.ToInt32(command.ExecuteScalar());
-                            }
-
-                            List<int> specializationIds = new List<int>();
-                            foreach (string specializationName in submission.options.Take(3))
-                            {
-                                using (SqlCommand command = new SqlCommand(@"
-                                    SELECT IdSpecializare
-                                    FROM Specializari
-                                    WHERE NumeSpecializare = @Nume",
-                                    connection, transaction))
-                                {
-                                    command.Parameters.Add("@Nume", SqlDbType.NVarChar, 100)
-                                        .Value = specializationName;
-                                    object specializationId = command.ExecuteScalar();
-                                    if (specializationId == null)
-                                        throw new InvalidOperationException(
-                                            "Specializarea „" + specializationName +
-                                            "” nu există în lista de specializări.");
-                                    specializationIds.Add(Convert.ToInt32(specializationId));
-                                }
-                            }
-
-                            using (SqlCommand command = new SqlCommand(@"
-                                INSERT INTO OptiuniCandidat
-                                    (IdCandidat, IdSpecializare1,
-                                     IdSpecializare2, IdSpecializare3)
-                                VALUES
-                                    (@IdCandidat, @Optiune1, @Optiune2, @Optiune3)",
-                                connection, transaction))
-                            {
-                                command.Parameters.Add("@IdCandidat", SqlDbType.Int)
-                                    .Value = candidateId;
-                                command.Parameters.Add("@Optiune1", SqlDbType.Int)
-                                    .Value = specializationIds[0];
-                                command.Parameters.Add("@Optiune2", SqlDbType.Int)
-                                    .Value = specializationIds.Count > 1
-                                        ? (object)specializationIds[1] : DBNull.Value;
-                                command.Parameters.Add("@Optiune3", SqlDbType.Int)
-                                    .Value = specializationIds.Count > 2
-                                        ? (object)specializationIds[2] : DBNull.Value;
-                                command.ExecuteNonQuery();
-                            }
-                            result = ImportResult.Imported;
-                        }
-
-                        using (SqlCommand command = new SqlCommand(@"
-                            INSERT INTO ImporturiWeb
-                                (ExternalId, CodInscriere, IdCandidat)
+                    if (candidateId == 0)
+                    {
+                        using (SQLiteCommand command = new SQLiteCommand(@"
+                            INSERT INTO Candidati
+                                (Nume, Prenume, Adresa, Varsta, Sex, CNP,
+                                 MedieBAC, MedieLiceu, Status)
                             VALUES
-                                (@ExternalId, @CodInscriere, @IdCandidat)",
+                                (@Nume, @Prenume, @Adresa, @Varsta, @Sex, @CNP,
+                                 @MedieBAC, @MedieLiceu, 'Nedefinit')",
                             connection, transaction))
                         {
-                            command.Parameters.Add("@ExternalId", SqlDbType.Int)
-                                .Value = submission.id;
-                            command.Parameters.Add("@CodInscriere", SqlDbType.NVarChar, 40)
-                                .Value = submission.submissionCode ?? string.Empty;
-                            command.Parameters.Add("@IdCandidat", SqlDbType.Int)
-                                .Value = candidateId;
+                            AddParameter(command, "@Nume", submission.nume);
+                            AddParameter(command, "@Prenume", submission.prenume);
+                            AddParameter(command, "@Adresa", submission.adresa);
+                            AddParameter(command, "@Varsta", submission.varsta);
+                            AddParameter(command, "@Sex", submission.sex);
+                            AddParameter(command, "@CNP", submission.cnp);
+                            AddParameter(command, "@MedieBAC", submission.medieBac);
+                            AddParameter(command, "@MedieLiceu", submission.medieLiceu);
                             command.ExecuteNonQuery();
                         }
 
-                        transaction.Commit();
-                        return result;
+                        candidateId = Convert.ToInt32(connection.LastInsertRowId);
+                        InsertCandidateChoices(
+                            connection, transaction, candidateId, submission.options);
+                        result = ImportResult.Imported;
                     }
-                    catch
+
+                    using (SQLiteCommand command = new SQLiteCommand(@"
+                        INSERT INTO ImporturiWeb
+                            (ExternalId, CodInscriere, IdCandidat)
+                        VALUES
+                            (@ExternalId, @CodInscriere, @IdCandidat)",
+                        connection, transaction))
                     {
-                        transaction.Rollback();
-                        throw;
+                        AddParameter(command, "@ExternalId", submission.id);
+                        AddParameter(command, "@CodInscriere",
+                            submission.submissionCode ?? string.Empty);
+                        AddParameter(command, "@IdCandidat", candidateId);
+                        command.ExecuteNonQuery();
                     }
+
+                    transaction.Commit();
+                    return result;
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
                 }
             }
         }
 
         public static bool DeleteCandidate(int candidateId)
         {
-            using (SqlConnection connection = new SqlConnection(connectionString))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
-                connection.Open();
-                using (SqlTransaction transaction = connection.BeginTransaction())
+                try
                 {
-                    try
-                    {
-                        ExecuteTransactionCommand(connection, transaction,
-                            "DELETE FROM AdmitereFinala WHERE IdCandidat = @Id", candidateId);
-                        ExecuteTransactionCommand(connection, transaction,
-                            "IF OBJECT_ID('ImporturiWeb', 'U') IS NOT NULL DELETE FROM ImporturiWeb WHERE IdCandidat = @Id",
-                            candidateId);
-                        ExecuteTransactionCommand(connection, transaction,
-                            "DELETE FROM OptiuniCandidat WHERE IdCandidat = @Id", candidateId);
-                        int deleted = ExecuteTransactionCommand(connection, transaction,
-                            "DELETE FROM Candidati WHERE IdCandidat = @Id", candidateId);
-                        transaction.Commit();
-                        return deleted > 0;
-                    }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+                    ExecuteTransactionCommand(connection, transaction,
+                        "DELETE FROM AdmitereFinala WHERE IdCandidat = @Id", candidateId);
+                    ExecuteTransactionCommand(connection, transaction,
+                        "DELETE FROM ImporturiWeb WHERE IdCandidat = @Id", candidateId);
+                    ExecuteTransactionCommand(connection, transaction,
+                        "DELETE FROM OptiuniCandidat WHERE IdCandidat = @Id", candidateId);
+                    int deleted = ExecuteTransactionCommand(connection, transaction,
+                        "DELETE FROM Candidati WHERE IdCandidat = @Id", candidateId);
+                    transaction.Commit();
+                    return deleted > 0;
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
                 }
             }
         }
@@ -656,147 +448,265 @@ namespace Proiect_admitere_facultate
                 WHERE IdCandidat = @Id";
 
             return InsertUpdateOrDelete(query,
-                new SqlParameter("@Status", SqlDbType.NVarChar, 20) { Value = status },
-                new SqlParameter("@Id", SqlDbType.Int) { Value = candidateId }) > 0;
+                CreateParameter("@Status", status),
+                CreateParameter("@Id", candidateId)) > 0;
         }
 
         public static int RunAdmission()
         {
-            using (SqlConnection connection = new SqlConnection(connectionString))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
-                connection.Open();
-                using (SqlTransaction transaction = connection.BeginTransaction())
+                try
                 {
-                    try
+                    Dictionary<int, int> availableSeats = new Dictionary<int, int>();
+                    using (SQLiteCommand command = new SQLiteCommand(
+                        "SELECT IdSpecializare, NrLocuri FROM Specializari",
+                        connection, transaction))
+                    using (SQLiteDataReader reader = command.ExecuteReader())
                     {
-                        Dictionary<int, int> availableSeats = new Dictionary<int, int>();
-                        using (SqlCommand command = new SqlCommand(
-                            "SELECT IdSpecializare, NrLocuri FROM Specializari", connection, transaction))
-                        using (SqlDataReader reader = command.ExecuteReader())
-                        {
-                            while (reader.Read())
-                                availableSeats[reader.GetInt32(0)] =
-                                    reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
-                        }
+                        while (reader.Read())
+                            availableSeats[reader.GetInt32(0)] =
+                                reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                    }
 
-                        const string candidatesQuery = @"
-                            SELECT C.IdCandidat, C.MedieLiceu, C.MedieBAC,
-                                   O.IdSpecializare1, O.IdSpecializare2, O.IdSpecializare3
-                            FROM Candidati C
-                            CROSS APPLY
+                    const string candidatesQuery = @"
+                        SELECT C.IdCandidat, C.MedieLiceu, C.MedieBAC,
+                               O.IdSpecializare1, O.IdSpecializare2, O.IdSpecializare3
+                        FROM Candidati C
+                        INNER JOIN
+                        (
+                            SELECT O1.*
+                            FROM OptiuniCandidat O1
+                            INNER JOIN
                             (
-                                SELECT TOP 1 IdSpecializare1, IdSpecializare2, IdSpecializare3
+                                SELECT IdCandidat, MAX(IdOptiune) AS IdOptiune
                                 FROM OptiuniCandidat
-                                WHERE IdCandidat = C.IdCandidat
-                                ORDER BY IdOptiune DESC
-                            ) O
-                            ORDER BY (C.MedieLiceu * 0.3 + C.MedieBAC * 0.7) DESC,
-                                     C.IdCandidat ASC";
+                                GROUP BY IdCandidat
+                            ) Ultima
+                                ON O1.IdCandidat = Ultima.IdCandidat
+                               AND O1.IdOptiune = Ultima.IdOptiune
+                        ) O ON C.IdCandidat = O.IdCandidat
+                        ORDER BY (C.MedieLiceu * 0.3 + C.MedieBAC * 0.7) DESC,
+                                 C.IdCandidat ASC";
 
-                        DataTable candidates = new DataTable();
-                        using (SqlCommand command = new SqlCommand(candidatesQuery, connection, transaction))
-                        using (SqlDataAdapter adapter = new SqlDataAdapter(command))
-                            adapter.Fill(candidates);
+                    DataTable candidates = new DataTable();
+                    using (SQLiteCommand command = new SQLiteCommand(
+                        candidatesQuery, connection, transaction))
+                    using (SQLiteDataAdapter adapter = new SQLiteDataAdapter(command))
+                        adapter.Fill(candidates);
 
-                        using (SqlCommand clear = new SqlCommand(
-                            "DELETE FROM AdmitereFinala; UPDATE Candidati SET Status = 'Nedefinit';",
-                            connection, transaction))
-                            clear.ExecuteNonQuery();
+                    using (SQLiteCommand clear = new SQLiteCommand(
+                        "DELETE FROM AdmitereFinala", connection, transaction))
+                        clear.ExecuteNonQuery();
+                    using (SQLiteCommand reset = new SQLiteCommand(
+                        "UPDATE Candidati SET Status = 'Nedefinit'",
+                        connection, transaction))
+                        reset.ExecuteNonQuery();
 
-                        int admitted = 0;
-                        foreach (DataRow row in candidates.Rows)
+                    int admitted = 0;
+                    foreach (DataRow row in candidates.Rows)
+                    {
+                        int candidateId = Convert.ToInt32(row["IdCandidat"]);
+                        int selectedSpecialization = 0;
+                        string[] optionColumns =
+                            { "IdSpecializare1", "IdSpecializare2", "IdSpecializare3" };
+
+                        foreach (string column in optionColumns)
                         {
-                            int candidateId = Convert.ToInt32(row["IdCandidat"]);
-                            int selectedSpecialization = 0;
-                            string[] optionColumns =
-                                { "IdSpecializare1", "IdSpecializare2", "IdSpecializare3" };
+                            if (row[column] == DBNull.Value)
+                                continue;
 
-                            foreach (string column in optionColumns)
+                            int specializationId = Convert.ToInt32(row[column]);
+                            int seats;
+                            if (availableSeats.TryGetValue(specializationId, out seats) &&
+                                seats > 0)
                             {
-                                if (row[column] == DBNull.Value)
-                                    continue;
-
-                                int specializationId = Convert.ToInt32(row[column]);
-                                int seats;
-                                if (availableSeats.TryGetValue(specializationId, out seats) && seats > 0)
-                                {
-                                    selectedSpecialization = specializationId;
-                                    availableSeats[specializationId] = seats - 1;
-                                    break;
-                                }
-                            }
-
-                            if (selectedSpecialization > 0)
-                            {
-                                using (SqlCommand insert = new SqlCommand(@"
-                                    INSERT INTO AdmitereFinala (IdCandidat, IdSpecializare)
-                                    VALUES (@IdCandidat, @IdSpecializare)", connection, transaction))
-                                {
-                                    insert.Parameters.Add("@IdCandidat", SqlDbType.Int).Value = candidateId;
-                                    insert.Parameters.Add("@IdSpecializare", SqlDbType.Int)
-                                        .Value = selectedSpecialization;
-                                    insert.ExecuteNonQuery();
-                                }
-                                admitted++;
-                            }
-
-                            using (SqlCommand update = new SqlCommand(@"
-                                UPDATE Candidati
-                                SET Status = @Status
-                                WHERE IdCandidat = @IdCandidat", connection, transaction))
-                            {
-                                update.Parameters.Add("@Status", SqlDbType.NVarChar, 20)
-                                    .Value = selectedSpecialization > 0 ? "Admis" : "Respins";
-                                update.Parameters.Add("@IdCandidat", SqlDbType.Int).Value = candidateId;
-                                update.ExecuteNonQuery();
+                                selectedSpecialization = specializationId;
+                                availableSeats[specializationId] = seats - 1;
+                                break;
                             }
                         }
 
-                        transaction.Commit();
-                        return admitted;
+                        if (selectedSpecialization > 0)
+                        {
+                            using (SQLiteCommand insert = new SQLiteCommand(@"
+                                INSERT INTO AdmitereFinala
+                                    (IdCandidat, IdSpecializare)
+                                VALUES
+                                    (@IdCandidat, @IdSpecializare)",
+                                connection, transaction))
+                            {
+                                AddParameter(insert, "@IdCandidat", candidateId);
+                                AddParameter(insert, "@IdSpecializare",
+                                    selectedSpecialization);
+                                insert.ExecuteNonQuery();
+                            }
+                            admitted++;
+                        }
+
+                        using (SQLiteCommand update = new SQLiteCommand(@"
+                            UPDATE Candidati
+                            SET Status = @Status
+                            WHERE IdCandidat = @IdCandidat",
+                            connection, transaction))
+                        {
+                            AddParameter(update, "@Status",
+                                selectedSpecialization > 0 ? "Admis" : "Respins");
+                            AddParameter(update, "@IdCandidat", candidateId);
+                            update.ExecuteNonQuery();
+                        }
                     }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+
+                    transaction.Commit();
+                    return admitted;
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
                 }
             }
         }
 
         public static void ResetAdmission()
         {
-            using (SqlConnection connection = new SqlConnection(connectionString))
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteTransaction transaction = connection.BeginTransaction())
             {
-                connection.Open();
-                using (SqlTransaction transaction = connection.BeginTransaction())
+                try
                 {
-                    try
-                    {
-                        using (SqlCommand command = new SqlCommand(@"
-                            DELETE FROM AdmitereFinala;
-                            UPDATE Candidati SET Status = 'Nedefinit';",
-                            connection, transaction))
-                            command.ExecuteNonQuery();
-                        transaction.Commit();
-                    }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+                    using (SQLiteCommand command = new SQLiteCommand(
+                        "DELETE FROM AdmitereFinala", connection, transaction))
+                        command.ExecuteNonQuery();
+                    using (SQLiteCommand command = new SQLiteCommand(
+                        "UPDATE Candidati SET Status = 'Nedefinit'",
+                        connection, transaction))
+                        command.ExecuteNonQuery();
+                    transaction.Commit();
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
                 }
             }
         }
 
-        private static int ExecuteTransactionCommand(SqlConnection connection,
-            SqlTransaction transaction, string query, int candidateId)
+        private static bool CandidateExistsByCnp(
+            SQLiteConnection connection, SQLiteTransaction transaction, string cnp)
         {
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
+            return FindCandidateIdByCnp(connection, transaction, cnp) > 0;
+        }
+
+        private static int FindCandidateIdByCnp(
+            SQLiteConnection connection, SQLiteTransaction transaction, string cnp)
+        {
+            using (SQLiteCommand command = new SQLiteCommand(@"
+                SELECT IdCandidat
+                FROM Candidati
+                WHERE CNP = @CNP",
+                connection, transaction))
             {
-                command.Parameters.Add("@Id", SqlDbType.Int).Value = candidateId;
+                AddParameter(command, "@CNP", cnp);
+                object result = command.ExecuteScalar();
+                return result == null || result == DBNull.Value
+                    ? 0
+                    : Convert.ToInt32(result);
+            }
+        }
+
+        private static void InsertCandidateChoices(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            int candidateId,
+            IList<string> specializationNames)
+        {
+            List<int> specializationIds = new List<int>();
+            foreach (string specializationName in specializationNames.Take(3))
+            {
+                using (SQLiteCommand command = new SQLiteCommand(@"
+                    SELECT IdSpecializare
+                    FROM Specializari
+                    WHERE NumeSpecializare = @NumeSpecializare",
+                    connection, transaction))
+                {
+                    AddParameter(command, "@NumeSpecializare", specializationName);
+                    object result = command.ExecuteScalar();
+                    if (result == null || result == DBNull.Value)
+                        throw new InvalidOperationException(
+                            "Specializarea „" + specializationName +
+                            "” nu există în baza de date.");
+                    specializationIds.Add(Convert.ToInt32(result));
+                }
+            }
+
+            if (specializationIds.Count == 0)
+                throw new InvalidOperationException(
+                    "Este necesară cel puțin o opțiune validă.");
+
+            using (SQLiteCommand command = new SQLiteCommand(@"
+                INSERT INTO OptiuniCandidat
+                    (IdCandidat, IdSpecializare1,
+                     IdSpecializare2, IdSpecializare3)
+                VALUES
+                    (@IdCandidat, @Optiune1, @Optiune2, @Optiune3)",
+                connection, transaction))
+            {
+                AddParameter(command, "@IdCandidat", candidateId);
+                AddParameter(command, "@Optiune1", specializationIds[0]);
+                AddParameter(command, "@Optiune2",
+                    specializationIds.Count > 1
+                        ? (object)specializationIds[1]
+                        : DBNull.Value);
+                AddParameter(command, "@Optiune3",
+                    specializationIds.Count > 2
+                        ? (object)specializationIds[2]
+                        : DBNull.Value);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static int ExecuteTransactionCommand(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            string query,
+            int candidateId)
+        {
+            using (SQLiteCommand command = new SQLiteCommand(query, connection, transaction))
+            {
+                AddParameter(command, "@Id", candidateId);
                 return command.ExecuteNonQuery();
             }
+        }
+
+        private static void AddParameters(
+            SQLiteCommand command, IEnumerable<IDbDataParameter> parameters)
+        {
+            if (parameters == null)
+                return;
+
+            foreach (IDbDataParameter parameter in parameters)
+            {
+                if (parameter == null)
+                    continue;
+
+                SQLiteParameter sqliteParameter = parameter as SQLiteParameter;
+                if (sqliteParameter != null)
+                {
+                    command.Parameters.Add(sqliteParameter);
+                }
+                else
+                {
+                    AddParameter(command, parameter.ParameterName, parameter.Value);
+                }
+            }
+        }
+
+        private static void AddParameter(
+            SQLiteCommand command, string name, object value)
+        {
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         }
     }
 }

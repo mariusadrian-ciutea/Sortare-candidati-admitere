@@ -1,6 +1,5 @@
 using System;
 using System.Data;
-using System.Data.SqlClient;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -47,7 +46,7 @@ namespace Proiect_admitere_facultate
             const string query = @"
                 SELECT
                     C.IdCandidat AS [cod unic],
-                    C.Nume + ' ' + C.Prenume AS [Nume complet],
+                    C.Nume || ' ' || C.Prenume AS [Nume complet],
                     C.Adresa AS [Adresa],
                     C.MedieLiceu,
                     C.MedieBAC,
@@ -135,7 +134,7 @@ namespace Proiect_admitere_facultate
             string criterion = alegeCriteriu.SelectedItem.ToString();
             string value = valoare_criteriu.Text.Trim();
             string query;
-            SqlParameter[] parameters = new SqlParameter[0];
+            IDbDataParameter[] parameters = new IDbDataParameter[0];
 
             if (criterion == "CNP")
             {
@@ -146,9 +145,9 @@ namespace Proiect_admitere_facultate
                 }
 
                 query = "SELECT * FROM Candidati WHERE CNP = @Valoare";
-                parameters = new[]
+                parameters = new IDbDataParameter[]
                 {
-                    new SqlParameter("@Valoare", SqlDbType.Char, 13) { Value = value }
+                    DatabaseManager.CreateParameter("@Valoare", value)
                 };
             }
             else if (criterion == "ID")
@@ -161,18 +160,18 @@ namespace Proiect_admitere_facultate
                 }
 
                 query = "SELECT * FROM Candidati WHERE IdCandidat = @Valoare";
-                parameters = new[]
+                parameters = new IDbDataParameter[]
                 {
-                    new SqlParameter("@Valoare", SqlDbType.Int) { Value = id }
+                    DatabaseManager.CreateParameter("@Valoare", id)
                 };
             }
             else
             {
                 string status = criterion.Replace("Status: ", string.Empty);
                 query = "SELECT * FROM Candidati WHERE Status = @Valoare";
-                parameters = new[]
+                parameters = new IDbDataParameter[]
                 {
-                    new SqlParameter("@Valoare", SqlDbType.NVarChar, 20) { Value = status }
+                    DatabaseManager.CreateParameter("@Valoare", status)
                 };
             }
 
@@ -239,7 +238,7 @@ namespace Proiect_admitere_facultate
                     C.Prenume,
                     F.NumeFacultate AS Facultate,
                     S.NumeSpecializare AS Specializare,
-                    CAST(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7 AS DECIMAL(5,2))
+                    ROUND(C.MedieLiceu * 0.3 + C.MedieBAC * 0.7, 2)
                         AS MedieFinala
                 FROM AdmitereFinala A
                 INNER JOIN Candidati C ON A.IdCandidat = C.IdCandidat

@@ -12,12 +12,12 @@ Proiectul contine o aplicatie Windows pentru gestionarea si repartizarea candida
 - preluarea inscrierilor trimise prin site;
 - listarea, cautarea si actualizarea candidatilor;
 - repartizarea candidatilor in functie de medie si optiuni;
-- persistenta datelor intr-o baza LocalDB creata automat la prima pornire;
+- persistenta datelor intr-o baza SQLite locala, creata automat la prima pornire;
 - formular online pentru date personale, medii si optiuni de specializare.
 
 ## Rulare aplicatie Windows
 
-Este necesar Microsoft .NET Framework 4.7.2 si Microsoft SQL Server LocalDB.
+Este necesar Microsoft .NET Framework 4.7.2. Nu este necesar Microsoft SQL Server.
 
 Deschide solutia:
 
@@ -44,7 +44,7 @@ npm run build
 
 ## Configurare
 
-Aplicatia Windows isi creeaza automat baza LocalDB daca nu gaseste una existenta. Pentru instalari noi, baza este salvata in folderul local al utilizatorului, in `%LOCALAPPDATA%\Sortare candidati admitere`.
+Aplicatia Windows foloseste SQLite si isi creeaza automat baza daca nu gaseste una existenta. Pentru instalari noi, baza este salvata in folderul local al utilizatorului, in `%LOCALAPPDATA%\Sortare candidati admitere\Admitere_database.sqlite`.
 
 Aplicatia foloseste `WebApiBaseUrl` si `WebImportToken` in `App.config` pentru importul inscrierilor.
 

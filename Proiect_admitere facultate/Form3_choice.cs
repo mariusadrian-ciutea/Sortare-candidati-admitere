@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
-using System.Data.SqlClient;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -103,10 +102,10 @@ namespace Proiect_admitere_facultate
                 registrationForm.Close();
                 Close();
             }
-            catch (SqlException ex) when (ex.Number == 2601 || ex.Number == 2627)
+            catch (InvalidOperationException ex)
             {
-                MessageBox.Show("Există deja o înscriere pentru acest CNP.",
-                    "Înscriere duplicată", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(ex.Message,
+                    "Înscriere nereușită", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             catch (Exception ex)
             {

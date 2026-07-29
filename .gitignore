@@ -34,6 +34,13 @@ work/
 # Local databases can contain personal data
 *.mdf
 *.ldf
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
 
 # OS files
 .DS_Store
