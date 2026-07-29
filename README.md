@@ -12,7 +12,7 @@ Proiectul contine o aplicatie Windows pentru gestionarea si repartizarea candida
 - preluarea inscrierilor trimise prin site;
 - listarea, cautarea si actualizarea candidatilor;
 - repartizarea candidatilor in functie de medie si optiuni;
-- persistenta datelor in baza LocalDB a aplicatiei;
+- persistenta datelor intr-o baza LocalDB creata automat la prima pornire;
 - formular online pentru date personale, medii si optiuni de specializare.
 
 ## Rulare aplicatie Windows
@@ -42,11 +42,13 @@ npm run build
 
 ## Configurare
 
-Aplicatia Windows foloseste `WebApiBaseUrl` si `WebImportToken` in `App.config` pentru importul inscrierilor.
+Aplicatia Windows isi creeaza automat baza LocalDB daca nu gaseste una existenta. Pentru instalari noi, baza este salvata in folderul local al utilizatorului, in `%LOCALAPPDATA%\Sortare candidati admitere`.
+
+Aplicatia foloseste `WebApiBaseUrl` si `WebImportToken` in `App.config` pentru importul inscrierilor.
 
 Site-ul foloseste variabila `ADMISSION_IMPORT_TOKEN`, definita local in `.env` dupa modelul din `.env.example`.
 
-Baza locala cu date reale nu este inclusa in repository. Pentru o baza noua, creeaza o baza LocalDB si ruleaza scriptul:
+Baza locala cu date reale nu este inclusa in repository. Scriptul de mai jos ramane disponibil pentru resetare sau creare manuala in dezvoltare:
 
 `Proiect_admitere facultate/SQLQuery2.sql`
 
